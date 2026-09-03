@@ -1,0 +1,6 @@
+plate_number,destination_name,notes
+AB1234,Lot A,Resident tower 1 - unit 305
+CD5678,Lot A,Resident tower 1 - unit 712
+XY9999,Lot B,Monthly tenant
+EF-2020,Lot B,Dashes and spaces are ignored when matching
+GH 4141,Lot C,Staff vehicle

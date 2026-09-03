@@ -1,0 +1,61 @@
+{% extends "dashboard/base.html" %}
+{% block title %}Dashboard - Smart Car Navigation{% endblock %}
+
+{% block content %}
+<h1>Dashboard</h1>
+
+<section class="cards">
+  <div class="card"><span class="big">{{ stats.vehicles }}</span> registered plates</div>
+  <div class="card"><span class="big">{{ stats.destinations }}</span> destinations</div>
+  <div class="card"><span class="big">{{ stats.signages }}</span> signages</div>
+  <div class="card"><span class="big">{{ stats.cameras }}</span> cameras</div>
+  <div class="card"><span class="big">{{ stats.events }}</span> detection events</div>
+</section>
+
+<h2>Signage display pages</h2>
+{% if signages %}
+  <p>Open these URLs in kiosk/fullscreen mode on the screen attached to each signage.</p>
+  <ul>
+    {% for signage in signages %}
+      <li>
+        <a href="/signage/{{ signage.code }}" target="_blank" rel="noopener">
+          /signage/{{ signage.code }}
+        </a>
+        - {{ signage.name }}{% if signage.location %} ({{ signage.location }}){% endif %}
+      </li>
+    {% endfor %}
+  </ul>
+{% else %}
+  <p class="empty">
+    No signage configured yet. Add one on the
+    <a href="/signages">Signages &amp; Cameras</a> page, or POST to
+    <code>/api/seed</code> to create sample data.
+  </p>
+{% endif %}
+
+<h2>Latest detections</h2>
+{% if recent_events %}
+<table>
+  <thead>
+    <tr><th>Time (UTC)</th><th>Plate</th><th>Camera</th><th>Shown destination</th></tr>
+  </thead>
+  <tbody>
+    {% for event in recent_events %}
+      <tr>
+        <td>{{ event.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+        <td>{{ event.plate_number }}</td>
+        <td>{{ event.camera.code if event.camera else '-' }}</td>
+        <td>
+          {% if event.matched_destination %}{{ event.matched_destination.name }}
+          {% else %}<span class="warn">unregistered</span>{% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+  <p class="empty">
+    No detections yet. Run <code>python scripts/simulate_camera_event.py</code> to fake one.
+  </p>
+{% endif %}
+{% endblock %}

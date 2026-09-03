@@ -1,0 +1,40 @@
+{% extends "dashboard/base.html" %}
+{% block title %}CSV Import - Smart Car Navigation{% endblock %}
+
+{% block content %}
+<h1>CSV import (registered vehicles)</h1>
+
+<section class="panel">
+  <p>Expected columns (header row required, UTF-8, max 1&nbsp;MB):</p>
+  <pre>plate_number,destination_name,notes
+AB1234,Lot A,Resident tower 1
+XY9999,Lot B,Monthly tenant</pre>
+  <ul>
+    <li><code>plate_number</code> - required. Spaces and dashes are ignored when matching.</li>
+    <li><code>destination_name</code> - required. Unknown names are created automatically.</li>
+    <li><code>notes</code> - optional free text.</li>
+  </ul>
+  <p>A plate already in the system is <strong>updated</strong>, not duplicated.</p>
+
+  <form method="post" action="/csv-import" enctype="multipart/form-data" class="inline-form">
+    <input type="file" name="file" accept=".csv,text/csv" required>
+    <button type="submit">Upload &amp; import</button>
+  </form>
+</section>
+
+{% if result %}
+<section class="panel">
+  <h2>Import result{% if filename %} - {{ filename }}{% endif %}</h2>
+  <p>
+    <strong>{{ result.created }}</strong> created,
+    <strong>{{ result.updated }}</strong> updated
+    ({{ result.total }} row(s) imported).
+  </p>
+  {% if result.errors %}
+    <h3 class="warn">Skipped rows</h3>
+    <ul>{% for error in result.errors %}<li class="warn">{{ error }}</li>{% endfor %}</ul>
+  {% endif %}
+  <p><a href="/vehicles">View the vehicle list →</a></p>
+</section>
+{% endif %}
+{% endblock %}

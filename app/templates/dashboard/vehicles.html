@@ -1,0 +1,90 @@
+{% extends "dashboard/base.html" %}
+{% block title %}Vehicles - Smart Car Navigation{% endblock %}
+
+{% block content %}
+<h1>Registered vehicles</h1>
+
+<section class="panel">
+  <h2>Manual entry (guard)</h2>
+  <p>Use this for visitors / unregistered cars. Submitting an existing plate updates it.</p>
+  {% if destinations %}
+  <form method="post" action="/vehicles" class="inline-form">
+    <label>Plate number
+      <input type="text" name="plate_number" placeholder="AB1234" required>
+    </label>
+    <label>Destination
+      <select name="destination_id" required>
+        {% for destination in destinations %}
+          <option value="{{ destination.id }}">
+            {{ destination.name }} ({{ destination.direction_hint }})
+          </option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Notes
+      <input type="text" name="notes" placeholder="optional">
+    </label>
+    <button type="submit">Save vehicle</button>
+  </form>
+  {% else %}
+    <p class="empty">
+      Create a destination first on the <a href="/signages">Signages &amp; Cameras</a> page.
+    </p>
+  {% endif %}
+</section>
+
+<section class="panel">
+  <h2>Search</h2>
+  <form method="get" action="/vehicles" class="inline-form">
+    <label>Plate contains
+      <input type="text" name="q" value="{{ q }}" placeholder="AB">
+    </label>
+    <button type="submit">Search</button>
+    <a class="button-link" href="/vehicles">Clear</a>
+  </form>
+</section>
+
+<table>
+  <thead>
+    <tr>
+      <th>Plate</th><th>Destination</th><th>Direction</th>
+      <th>Source</th><th>Notes</th><th>Updated (UTC)</th><th></th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for vehicle in vehicles %}
+      <tr>
+        <td class="mono">{{ vehicle.plate_number }}</td>
+        <td>
+          {# Editing = re-posting the same plate with another destination. #}
+          <form method="post" action="/vehicles" class="row-form">
+            <input type="hidden" name="plate_number" value="{{ vehicle.plate_number }}">
+            <input type="hidden" name="notes" value="{{ vehicle.notes or '' }}">
+            <select name="destination_id">
+              {% for destination in destinations %}
+                <option value="{{ destination.id }}"
+                  {{ 'selected' if destination.id == vehicle.destination_id }}>
+                  {{ destination.name }}
+                </option>
+              {% endfor %}
+            </select>
+            <button type="submit">Save</button>
+          </form>
+        </td>
+        <td>{{ vehicle.destination.direction_hint }}</td>
+        <td>{{ vehicle.source.value }}</td>
+        <td>{{ vehicle.notes or '' }}</td>
+        <td>{{ vehicle.updated_at.strftime('%Y-%m-%d %H:%M') }}</td>
+        <td>
+          <form method="post" action="/vehicles/{{ vehicle.id }}/delete"
+                onsubmit="return confirm('Delete {{ vehicle.plate_number }}?');">
+            <button type="submit" class="danger">Delete</button>
+          </form>
+        </td>
+      </tr>
+    {% else %}
+      <tr><td colspan="7" class="empty">No vehicles found.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

@@ -1,0 +1,33 @@
+{# Full-screen page shown on a signage. Point the screen's browser here in
+   kiosk mode: http://<server-ip>:8000/signage/<signage_code>
+   It polls the JSON API once per second and re-renders - no user interaction. #}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ signage.name }} - Smart Car Navigation</title>
+  <link rel="stylesheet" href="/static/signage.css">
+</head>
+<body class="state-idle">
+  <div id="screen" class="screen">
+    <div id="arrow" class="arrow"></div>
+    <div id="destination" class="destination"></div>
+    <div id="plate" class="plate"></div>
+  </div>
+
+  <div class="corner">
+    <span id="signage-label">{{ signage.code }} - {{ signage.name }}</span>
+    <span id="connection" class="ok">online</span>
+  </div>
+
+  <script>
+    // Everything the page needs is passed in from the server; `initial` is the
+    // same payload shape the polling endpoint returns.
+    const SIGNAGE_CODE = {{ signage.code | tojson }};
+    const INITIAL = {{ initial | tojson }};
+    const POLL_URL = "/api/signage/" + encodeURIComponent(SIGNAGE_CODE) + "/current";
+  </script>
+  <script src="/static/signage.js"></script>
+</body>
+</html>
