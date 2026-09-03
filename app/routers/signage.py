@@ -64,15 +64,33 @@ def build_current_payload(db: Session, signage: Signage) -> SignageCurrentOut:
             server_time=services.utcnow(),
         )
 
+    # Direction now comes from the signage_route configured for THIS signage +
+    # destination, not from a global field on the destination (Problem 1).
+    route = services.resolve_signage_route(db, signage.id, destination.id)
+    if route is None:
+        return SignageCurrentOut(
+            signage_id=signage.id,
+            signage_code=signage.code,
+            signage_name=signage.name,
+            state="unrouted",
+            destination=destination.name,
+            plate_number=state.current_plate_number,
+            message=services.UNROUTED_MESSAGE,
+            route_configured=False,
+            last_updated_at=state.last_updated_at,
+            server_time=services.utcnow(),
+        )
+
     return SignageCurrentOut(
         signage_id=signage.id,
         signage_code=signage.code,
         signage_name=signage.name,
         state="guiding",
         destination=destination.name,
-        direction_hint=destination.direction_hint,
+        direction=route.direction,
+        route_configured=True,
         plate_number=state.current_plate_number,
-        message=destination.name,
+        message=services.build_display_message(route, destination),
         last_updated_at=state.last_updated_at,
         server_time=services.utcnow(),
     )

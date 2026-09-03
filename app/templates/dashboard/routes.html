@@ -1,0 +1,59 @@
+{% extends "dashboard/base.html" %}
+{% block title %}Routing table - {{ signage.code }} - Smart Car Navigation{% endblock %}
+
+{% block content %}
+<h1>Routing table - {{ signage.code }} ({{ signage.name }})</h1>
+<p>
+  This is the direction shown on <strong>this signage only</strong> for each
+  destination. The same destination can (and often should) have a different
+  direction configured on a different signage - see the README for why.
+</p>
+<p>
+  <a href="/signages">&larr; Back to signages &amp; cameras</a>
+</p>
+
+<table>
+  <thead>
+    <tr><th>Destination</th><th>Direction &amp; message</th><th>Status</th><th></th></tr>
+  </thead>
+  <tbody>
+    {% for destination in destinations %}
+      {% set route = routes_by_destination.get(destination.id) %}
+      <tr>
+        <td>{{ destination.name }}</td>
+        <td>
+          <form method="post" action="/signages/{{ signage.id }}/routes" class="row-form">
+            <input type="hidden" name="destination_id" value="{{ destination.id }}">
+            <select name="direction">
+              {% for direction in directions %}
+                <option value="{{ direction }}"
+                  {{ 'selected' if route and route.direction == direction }}>
+                  {{ direction }}
+                </option>
+              {% endfor %}
+            </select>
+            <input type="text" name="display_label" placeholder="e.g. Visitor parking on your right"
+                   value="{{ route.display_label if route else '' }}">
+            <button type="submit">Save</button>
+          </form>
+        </td>
+        <td>
+          {% if route %}configured
+          {% else %}<span class="warn">not configured - shows "See attendant"</span>{% endif %}
+        </td>
+        <td>
+          {% if route %}
+            <form method="post"
+                  action="/signages/{{ signage.id }}/routes/{{ destination.id }}/delete"
+                  onsubmit="return confirm('Remove this route?');">
+              <button type="submit" class="danger">Remove</button>
+            </form>
+          {% endif %}
+        </td>
+      </tr>
+    {% else %}
+      <tr><td colspan="4" class="empty">No destinations yet.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

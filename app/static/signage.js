@@ -10,6 +10,7 @@
     left: "\u2190",     // ←
     right: "\u2192",    // →
     straight: "\u2191", // ↑
+    u_turn: "\u21B6",   // ↶
     up: "\u2191",
     back: "\u2193"
   };
@@ -25,8 +26,8 @@
     body.className = "state-" + (data.state || "idle");
 
     if (data.state === "guiding") {
-      arrowEl.textContent = ARROWS[data.direction_hint] || "";
-      destinationEl.textContent = data.destination || data.message || "";
+      arrowEl.textContent = ARROWS[data.direction] || "";
+      destinationEl.textContent = data.message || data.destination || "";
     } else {
       arrowEl.textContent = data.state === "unregistered" ? "\u26A0" : "";
       destinationEl.textContent = data.message || "";

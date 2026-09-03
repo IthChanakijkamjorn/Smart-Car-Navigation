@@ -106,3 +106,41 @@ pre {
 }
 
 footer { max-width: 1100px; margin: 2rem auto; padding: 0 1rem; color: #6b7785; }
+
+/* Map View (Problem 2): a responsive image container with percentage-
+   positioned marker pins on top - no map library, keeps it dependency free. */
+.map-container {
+  position: relative;
+  width: 100%;
+  max-width: 900px;
+  border: 1px solid #e1e6ed;
+  border-radius: 6px;
+  overflow: hidden;
+}
+.map-image { display: block; width: 100%; height: auto; }
+.map-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 220px;
+  background: #eef2f7;
+  color: #6b7785;
+  padding: 1rem;
+  text-align: center;
+}
+.marker {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  font-size: 1.6rem;
+  cursor: pointer;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.6));
+}
+.marker-signage { color: #1f6feb; }
+.marker-destination { color: #c0392b; }
+.marker-details {
+  margin-top: 0.8rem;
+  background: #fff;
+  border: 1px solid #e1e6ed;
+  border-radius: 6px;
+  padding: 0.9rem 1.1rem;
+}

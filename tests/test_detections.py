@@ -5,7 +5,7 @@ from __future__ import annotations
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import DetectionEvent, SignageCurrentState, Vehicle, VehicleSource
+from app.models import DetectionEvent, SignageCurrentState, SignageRoute, Vehicle, VehicleSource
 
 
 def _register(db: Session, plate: str, destination_id: int) -> None:
@@ -17,8 +17,23 @@ def _register(db: Session, plate: str, destination_id: int) -> None:
     db.commit()
 
 
+def _add_route(
+    db: Session, signage_id: int, destination_id: int, direction: str, display_label=None
+) -> None:
+    db.add(
+        SignageRoute(
+            signage_id=signage_id,
+            destination_id=destination_id,
+            direction=direction,
+            display_label=display_label,
+        )
+    )
+    db.commit()
+
+
 def test_detection_updates_signage_state(client, db_session: Session, sample_setup: dict) -> None:
     _register(db_session, "AB1234", sample_setup["destination"].id)
+    _add_route(db_session, sample_setup["signage"].id, sample_setup["destination"].id, "left")
 
     response = client.post(
         "/api/detections",
@@ -29,21 +44,47 @@ def test_detection_updates_signage_state(client, db_session: Session, sample_set
     body = response.json()
     assert body["matched"] is True
     assert body["destination"] == "Lot A"
+    assert body["direction"] == "left"
+    assert body["route_configured"] is True
     assert body["signage_code"] == "SIGN-01"
 
     state = db_session.scalar(select(SignageCurrentState))
     assert state.current_destination_id == sample_setup["destination"].id
     assert state.current_plate_number == "AB1234"
 
-    # The display page and its polling endpoint reflect the new state.
+    # The display page and its polling endpoint reflect the new state,
+    # resolved from the per-signage route (not a fixed destination field).
     current = client.get("/api/signage/SIGN-01/current").json()
     assert current["state"] == "guiding"
     assert current["destination"] == "Lot A"
-    assert current["direction_hint"] == "left"
+    assert current["direction"] == "left"
 
     page = client.get("/signage/SIGN-01")
     assert page.status_code == 200
     assert "SIGN-01" in page.text
+
+
+def test_detection_matched_destination_without_route_falls_back(
+    client, db_session: Session, sample_setup: dict
+) -> None:
+    """Problem 1 fallback: a signage that was never configured for this
+    destination shows "See attendant" instead of guessing a direction."""
+    _register(db_session, "AB1234", sample_setup["destination"].id)
+    # Deliberately NOT adding a SignageRoute row.
+
+    response = client.post(
+        "/api/detections", json={"plateNumber": "AB1234", "cameraID": "CAM-ENTRANCE-01"}
+    )
+    body = response.json()
+    assert body["matched"] is True
+    assert body["route_configured"] is False
+    assert body["direction"] is None
+    assert body["message"] == "See attendant"
+
+    current = client.get("/api/signage/SIGN-01/current").json()
+    assert current["state"] == "unrouted"
+    assert current["destination"] == "Lot A"
+    assert current["message"] == "See attendant"
 
 
 def test_detection_of_unregistered_plate_is_logged(

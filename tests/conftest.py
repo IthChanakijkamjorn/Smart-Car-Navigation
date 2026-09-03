@@ -60,7 +60,7 @@ def client(db_session: Session):
 @pytest.fixture()
 def sample_setup(db_session: Session) -> dict[str, object]:
     """One destination, one signage and one camera linked together."""
-    destination = Destination(name="Lot A", direction_hint="left")
+    destination = Destination(name="Lot A")
     signage = Signage(code="SIGN-01", name="Entrance signage")
     db_session.add_all([destination, signage])
     db_session.flush()

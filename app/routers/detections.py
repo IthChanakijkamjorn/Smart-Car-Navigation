@@ -43,7 +43,7 @@ async def receive_detection(
     )
 
     if result.matched and result.destination is not None:
-        message = f"{result.destination.name}"
+        message = services.build_display_message(result.route, result.destination)
     else:
         message = services.UNREGISTERED_MESSAGE
 
@@ -52,7 +52,8 @@ async def receive_detection(
         plate_number=detection.plate_number,
         matched=result.matched,
         destination=result.destination.name if result.destination else None,
-        direction_hint=result.destination.direction_hint if result.destination else None,
+        direction=result.route.direction if result.route else None,
+        route_configured=result.route is not None,
         signage_code=result.signage.code if result.signage else None,
         message=message,
     )

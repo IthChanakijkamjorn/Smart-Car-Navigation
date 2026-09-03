@@ -11,6 +11,10 @@ data/
 *.db
 *.sqlite3
 
+# Uploaded site map images (created at runtime, never commit them)
+app/static/uploads/*
+!app/static/uploads/.gitkeep
+
 # Editors / OS
 .vscode/
 .idea/
