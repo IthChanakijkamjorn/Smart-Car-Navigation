@@ -89,12 +89,97 @@ def resolve_signage_route(
 
 
 def build_display_message(route: SignageRoute | None, destination: Destination) -> str:
-    """The text shown on screen once a destination + signage route are known."""
-    if route is None:
+    """The text shown on screen once a destination + signage route are known.
+
+    A missing row (``route is None``, kept for older/edge-case data - every
+    pair is normally auto-created, see ``ensure_signage_routes`` below) and an
+    explicit ``direction == "unset"`` row are treated identically: neither one
+    is a real direction, so both fall back to ``UNROUTED_MESSAGE``.
+    """
+    if route is None or route.direction == "unset":
         return UNROUTED_MESSAGE
     if route.display_label:
         return route.display_label
     return f"{destination.name} - {route.direction}"
+
+
+# Default direction given to every auto-created (signage, destination) pair.
+# Kept as a module constant (rather than inlining "unset" everywhere) so it is
+# easy to find/change in one place - see RouteDirection.UNSET for the reasoning.
+DEFAULT_ROUTE_DIRECTION = "unset"
+
+
+def ensure_signage_routes(db: Session, signage: Signage) -> int:
+    """Make sure ``signage`` has a ``signage_routes`` row for every destination.
+
+    Called whenever a signage is created (see ``admin.create_or_update_signage``)
+    so an admin never has to manually add the base pairing - new destinations
+    show up already in the "Unset / Not Configured" bucket on the routing page
+    and the admin only ever has to *move* them into the right direction.
+    Missing rows are added with ``DEFAULT_ROUTE_DIRECTION``; existing rows are
+    left untouched. Does not commit - the caller decides when to flush/commit.
+    Returns the number of rows created.
+    """
+    existing_destination_ids = {
+        route.destination_id
+        for route in db.scalars(
+            select(SignageRoute).where(SignageRoute.signage_id == signage.id)
+        )
+    }
+    created = 0
+    for destination in db.scalars(select(Destination)):
+        if destination.id in existing_destination_ids:
+            continue
+        db.add(
+            SignageRoute(
+                signage_id=signage.id,
+                destination_id=destination.id,
+                direction=DEFAULT_ROUTE_DIRECTION,
+            )
+        )
+        created += 1
+    return created
+
+
+def ensure_destination_routes(db: Session, destination: Destination) -> int:
+    """The mirror of ``ensure_signage_routes``: called when a destination is
+    created (directly, or indirectly via CSV import) so every existing
+    signage immediately gets a (default "unset") row for it too."""
+    existing_signage_ids = {
+        route.signage_id
+        for route in db.scalars(
+            select(SignageRoute).where(SignageRoute.destination_id == destination.id)
+        )
+    }
+    created = 0
+    for signage in db.scalars(select(Signage)):
+        if signage.id in existing_signage_ids:
+            continue
+        db.add(
+            SignageRoute(
+                signage_id=signage.id,
+                destination_id=destination.id,
+                direction=DEFAULT_ROUTE_DIRECTION,
+            )
+        )
+        created += 1
+    return created
+
+
+def backfill_all_signage_routes(db: Session) -> int:
+    """Migration/backfill helper: create any missing (signage, destination)
+    ``signage_routes`` row across the WHOLE database, defaulting to "unset".
+
+    This exists for data created before this feature was added (or by any
+    future direct-DB edit that skips the ORM). It is cheap to run and safe to
+    call repeatedly, so it is called once on every app startup (see
+    ``app.main``) instead of requiring a manual one-off migration step.
+    """
+    created = 0
+    for signage in db.scalars(select(Signage)):
+        created += ensure_signage_routes(db, signage)
+    db.commit()
+    return created
 
 
 def set_signage_state(
@@ -176,12 +261,13 @@ def process_detection(
     if signage is not None:
         if destination is not None:
             route = resolve_signage_route(db, signage.id, destination.id)
-            if route is None:
-                # This signage has never been told what direction to show for
-                # this destination - log it so the guard/installer notices and
-                # configures it on /signages/{id}/routes.
+            if route is None or route.direction == "unset":
+                # This signage has never been configured with a real
+                # direction for this destination (row missing, or still the
+                # auto-created "unset" default) - log it so the guard/
+                # installer notices and configures it on /signages/{id}/routes.
                 logger.warning(
-                    "No signage_route configured for signage=%s destination=%s "
+                    "No direction configured for signage=%s destination=%s "
                     "(showing fallback message)",
                     signage.code,
                     destination.name,
@@ -279,6 +365,9 @@ def get_or_create_destination(db: Session, name: str) -> Destination:
         destination = Destination(name=name)
         db.add(destination)
         db.flush()
+        # Immediately give every existing signage an "unset" route for this
+        # new destination (Improvement 2) - see ensure_destination_routes.
+        ensure_destination_routes(db, destination)
     return destination
 
 

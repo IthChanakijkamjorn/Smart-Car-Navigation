@@ -56,10 +56,19 @@ class RouteDirection(str, enum.Enum):
     """Direction shown on a signage for one of its configured destinations.
 
     Kept as a plain string column (not a DB-level ``Enum``) so a guard can type
-    a custom short word later without a migration - these four are just the
-    values offered by the admin UI dropdown.
+    a custom short word later without a migration - these are just the values
+    offered by the admin UI's direction "buckets" (see ``routes.html``).
+
+    ``UNSET`` is the default for every brand-new (signage, destination) pair
+    (see ``services.ensure_signage_routes`` / ``ensure_destination_routes``) -
+    it is a deliberately "loud" default so an admin immediately notices, on the
+    per-signage routing page, which destinations still need a real direction
+    picked. A signage showing ``UNSET`` for a destination behaves exactly like
+    "no route configured" used to: the driver sees the ``UNROUTED_MESSAGE``
+    fallback ("See attendant") - see ``services.build_display_message``.
     """
 
+    UNSET = "unset"
     LEFT = "left"
     RIGHT = "right"
     STRAIGHT = "straight"
@@ -183,9 +192,18 @@ class SignageRoute(Base):
         SIGN-01 -> Tower A -> "right"
         SIGN-02 -> Tower A -> "straight"   (further down the road)
 
-    A signage with no row here for a given destination has simply not been
-    configured yet - see ``services.resolve_signage_route`` for the fallback
-    behaviour used in that case.
+    Every (signage, destination) pair is expected to always have a row here -
+    they are auto-created with direction ``"unset"`` whenever a new signage or
+    destination is added (see ``services.ensure_signage_routes`` /
+    ``ensure_destination_routes``, and ``services.backfill_all_signage_routes``
+    for older data). Admins therefore only ever *adjust* the direction on the
+    routing page, never add/remove the pairing itself - see
+    ``app/templates/dashboard/routes.html``.
+
+    ``services.resolve_signage_route`` returning ``None`` is still handled
+    defensively (e.g. for rows created before this backfill existed) and is
+    treated the same as an explicit ``"unset"`` direction: the fallback
+    behaviour described in ``build_display_message`` below.
     """
 
     __tablename__ = "signage_routes"
@@ -196,9 +214,11 @@ class SignageRoute(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     signage_id: Mapped[int] = mapped_column(ForeignKey("signages.id"), nullable=False)
     destination_id: Mapped[int] = mapped_column(ForeignKey("destinations.id"), nullable=False)
-    # Free text on purpose (see RouteDirection) - the admin UI offers the four
-    # common values but nothing stops a guard typing something else.
-    direction: Mapped[str] = mapped_column(String(20), default="straight", nullable=False)
+    # Free text on purpose (see RouteDirection) - the admin UI offers those
+    # values but nothing stops a guard typing something else. Defaults to
+    # "unset" (see RouteDirection.UNSET) so every auto-created pair is
+    # visually obvious as "still needs configuring" on the routing page.
+    direction: Mapped[str] = mapped_column(String(20), default="unset", nullable=False)
     # Optional custom message shown instead of "<direction> to <destination>",
     # e.g. "Visitor parking is on your right, past the barrier".
     display_label: Mapped[str | None] = mapped_column(String(200), nullable=True)

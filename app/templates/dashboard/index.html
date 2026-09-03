@@ -8,9 +8,20 @@
   <h2>Site map</h2>
   <p>
     Click a marker for details. 🖥️ signages, 📍 destinations. Only items with a
-    map position set (see "Map position" links on the
-    <a href="/signages">Signages &amp; Cameras</a> page) show up here.
+    map position set show up here.
   </p>
+  <p>
+    <button type="button" id="edit-mode-toggle">Enable edit mode</button>
+    <span class="empty">
+      Turn on edit mode, drag markers to their new spot, then click
+      "Save positions".
+    </span>
+  </p>
+  <div id="map-edit-toolbar" class="edit-toolbar" hidden>
+    <button type="button" id="map-save-positions">Save positions</button>
+    <button type="button" id="map-discard-positions">Discard changes</button>
+    <span id="map-edit-status" class="empty"></span>
+  </div>
   <div class="map-container" id="map-container">
     {% if map_settings.image_path %}
       <img src="/static/{{ map_settings.image_path }}" class="map-image" alt="Site map">
@@ -21,6 +32,9 @@
       <div class="marker marker-signage"
            style="left: {{ marker.item.map_x }}%; top: {{ marker.item.map_y }}%;"
            data-type="signage"
+           data-id="{{ marker.item.id }}"
+           data-orig-x="{{ marker.item.map_x }}"
+           data-orig-y="{{ marker.item.map_y }}"
            data-title="{{ marker.item.code }} - {{ marker.item.name }}"
            data-location="{{ marker.item.location or 'no location set' }}"
            data-status="{{ marker.status }}"
@@ -32,6 +46,9 @@
       <div class="marker marker-destination"
            style="left: {{ marker.item.map_x }}%; top: {{ marker.item.map_y }}%;"
            data-type="destination"
+           data-id="{{ marker.item.id }}"
+           data-orig-x="{{ marker.item.map_x }}"
+           data-orig-y="{{ marker.item.map_y }}"
            data-title="{{ marker.item.name }}"
            data-position-url="/destinations/{{ marker.item.id }}/position"
            title="{{ marker.item.name }}">📍</div>
@@ -46,27 +63,161 @@
   <script>
     (function () {
       "use strict";
+
+      var mapContainer = document.getElementById("map-container");
+      var editModeToggle = document.getElementById("edit-mode-toggle");
+      var editToolbar = document.getElementById("map-edit-toolbar");
+      var editStatus = document.getElementById("map-edit-status");
+      var markers = Array.prototype.slice.call(document.querySelectorAll(".marker"));
+      var editMode = false;
+      // Pending, not-yet-saved marker moves: key is "type:id" so a signage
+      // and a destination can never collide, value is what gets POSTed.
+      var pendingPositions = {};
+
+      // --------------------------------------------------------------- //
+      // Click-to-show details panel (unchanged: still how a marker is
+      // inspected when edit mode is OFF - see the "if (editMode) return"
+      // guard below, which is what makes dragging take over instead once
+      // edit mode is turned on).
+      // --------------------------------------------------------------- //
       var details = document.getElementById("marker-details");
       var body = document.getElementById("marker-details-body");
       document.getElementById("marker-details-close").addEventListener("click", function () {
         details.hidden = true;
       });
-      document.querySelectorAll(".marker").forEach(function (marker) {
+      markers.forEach(function (marker) {
         marker.addEventListener("click", function () {
+          if (editMode) return; // dragging is the primary action while editing
           var d = marker.dataset;
           var html = "<h3>" + d.title + "</h3>";
           if (d.type === "signage") {
             html += "<p>Location: " + d.location + "</p>";
             html += "<p>Currently showing: <strong>" + d.status + "</strong></p>";
             html += "<p><a href=\"" + d.routesUrl + "\">Edit routing table</a> &middot; ";
-            html += "<a href=\"" + d.positionUrl + "\">Edit map position</a></p>";
+            html += "<a href=\"" + d.positionUrl + "\">Edit position manually</a></p>";
           } else {
-            html += "<p><a href=\"" + d.positionUrl + "\">Edit map position</a></p>";
+            html += "<p><a href=\"" + d.positionUrl + "\">Edit position manually</a></p>";
             html += "<p><a href=\"/vehicles\">See vehicles routed here</a></p>";
           }
           body.innerHTML = html;
           details.hidden = false;
         });
+      });
+
+      // --------------------------------------------------------------- //
+      // Drag-and-drop marker positioning (Improvement 1).
+      //
+      // Unlike the direction buckets on the routing page (which move whole
+      // list items and use the HTML5 drag-and-drop API), markers here need
+      // free-form pixel positioning inside the map image, so this uses the
+      // Pointer Events API instead (pointerdown/pointermove/pointerup) -
+      // one set of events that covers both mouse AND touch, no library.
+      //
+      // The math: on every pointermove we work out how far across/down the
+      // map-container the pointer is, as a PERCENTAGE of the container's
+      // width/height (clamped to 0-100) - that percentage is exactly what
+      // map_x/map_y already store, so the marker's on-screen position and
+      // the value we eventually save are always the same number.
+      // --------------------------------------------------------------- //
+      function clamp(value, min, max) {
+        return Math.max(min, Math.min(max, value));
+      }
+
+      function wireDrag(marker) {
+        marker.addEventListener("pointerdown", function (downEvt) {
+          if (!editMode) return; // markers are not draggable outside edit mode
+          downEvt.preventDefault();
+          marker.setPointerCapture(downEvt.pointerId);
+          var rect = mapContainer.getBoundingClientRect();
+
+          function onMove(moveEvt) {
+            var xPct = clamp(((moveEvt.clientX - rect.left) / rect.width) * 100, 0, 100);
+            var yPct = clamp(((moveEvt.clientY - rect.top) / rect.height) * 100, 0, 100);
+            marker.style.left = xPct + "%";
+            marker.style.top = yPct + "%";
+            marker.dataset.pendingX = xPct.toFixed(2);
+            marker.dataset.pendingY = yPct.toFixed(2);
+          }
+
+          function onUp(upEvt) {
+            marker.releasePointerCapture(upEvt.pointerId);
+            marker.removeEventListener("pointermove", onMove);
+            marker.removeEventListener("pointerup", onUp);
+            // Only record a pending change if the marker actually moved -
+            // dataset.pendingX/Y are only set inside onMove above.
+            if (marker.dataset.pendingX !== undefined) {
+              pendingPositions[marker.dataset.type + ":" + marker.dataset.id] = {
+                type: marker.dataset.type,
+                id: parseInt(marker.dataset.id, 10),
+                x: parseFloat(marker.dataset.pendingX),
+                y: parseFloat(marker.dataset.pendingY)
+              };
+              editStatus.textContent = Object.keys(pendingPositions).length + " unsaved change(s).";
+            }
+          }
+
+          marker.addEventListener("pointermove", onMove);
+          marker.addEventListener("pointerup", onUp);
+        });
+      }
+
+      markers.forEach(wireDrag);
+
+      function discardChanges() {
+        markers.forEach(function (marker) {
+          marker.style.left = marker.dataset.origX + "%";
+          marker.style.top = marker.dataset.origY + "%";
+          delete marker.dataset.pendingX;
+          delete marker.dataset.pendingY;
+        });
+        pendingPositions = {};
+        editStatus.textContent = "";
+      }
+
+      function enterEditMode() {
+        editMode = true;
+        mapContainer.classList.add("edit-mode");
+        editModeToggle.textContent = "Done editing";
+        editToolbar.hidden = false;
+      }
+
+      function exitEditMode() {
+        discardChanges(); // never leave a half-dragged, unsaved marker behind
+        editMode = false;
+        mapContainer.classList.remove("edit-mode");
+        editModeToggle.textContent = "Enable edit mode";
+        editToolbar.hidden = true;
+      }
+
+      editModeToggle.addEventListener("click", function () {
+        if (editMode) exitEditMode(); else enterEditMode();
+      });
+
+      document.getElementById("map-discard-positions").addEventListener("click", discardChanges);
+
+      document.getElementById("map-save-positions").addEventListener("click", function () {
+        var updates = Object.keys(pendingPositions).map(function (key) {
+          return pendingPositions[key];
+        });
+        if (updates.length === 0) {
+          editStatus.textContent = "No changes to save.";
+          return;
+        }
+        fetch("/map/positions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(updates)
+        })
+          .then(function (resp) {
+            if (!resp.ok) throw new Error("Server rejected the changes.");
+            return resp.json();
+          })
+          .then(function () {
+            window.location.reload(); // simplest way to refresh data-orig-x/y
+          })
+          .catch(function (err) {
+            editStatus.textContent = "Error saving positions: " + err.message;
+          });
       });
     })();
   </script>

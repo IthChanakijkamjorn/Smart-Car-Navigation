@@ -1,10 +1,17 @@
 """Admin pages for Problem 1 (per-signage routing) and Problem 2 (Map View).
 
-* ``/signages/{id}/routes``       - per-signage routing table (direction per
-  destination) - the fix for "direction depends on which signage").
-* ``/map/upload``                 - upload the background image for the Map View.
-* ``/signages/{id}/position``     - set a signage's marker position on the map.
-* ``/destinations/{id}/position`` - set a destination's marker position on the map.
+* ``/signages/{id}/routes``               - per-signage routing page, now
+  grouping destinations into direction "buckets" (Improvement 2) instead of a
+  flat one-row-per-destination table.
+* ``/signages/{id}/routes/bulk-update``    - batch save for the bucket drag UI.
+* ``/map/upload``                          - upload the background image for
+  the Map View.
+* ``/map/positions``                       - batch save for marker positions
+  dragged on the Map View (Improvement 1).
+* ``/signages/{id}/position``              - manual numeric fallback for one
+  signage's marker position.
+* ``/destinations/{id}/position``          - manual numeric fallback for one
+  destination's marker position.
 
 Kept in its own router file (rather than growing ``admin.py`` further) so each
 file stays focused on one concern.
@@ -19,13 +26,14 @@ from pathlib import Path
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app import services
 from app.database import get_db
 from app.models import Destination, RouteDirection, Signage, SignageRoute
+from app.schemas import MapPositionUpdate
 from app.templating import STATIC_DIR, templates
 
 router = APIRouter(tags=["admin", "map"])
@@ -34,6 +42,18 @@ UPLOAD_DIR = STATIC_DIR / "uploads"
 # Only allow a small set of common image types for the site map.
 ALLOWED_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
 MAX_MAP_IMAGE_BYTES = 8 * 1_024 * 1_024  # 8 MB is plenty for a floor-plan photo/scan
+
+# The direction "buckets" shown on the routing page, in display order. "unset"
+# is listed first (and rendered with a warning colour, see routes.html/CSS) so
+# it is immediately obvious which destinations still need configuring for a
+# given signage - see RouteDirection.UNSET.
+BUCKET_DIRECTIONS: list[tuple[str, str]] = [
+    (RouteDirection.UNSET.value, "Unset / Not configured"),
+    (RouteDirection.LEFT.value, "Left"),
+    (RouteDirection.RIGHT.value, "Right"),
+    (RouteDirection.STRAIGHT.value, "Straight"),
+    (RouteDirection.U_TURN.value, "U-Turn"),
+]
 
 
 def _redirect(path: str, message: str = "") -> RedirectResponse:
@@ -70,22 +90,39 @@ def _get_destination_or_404(db: Session, destination_id: int) -> Destination:
 def signage_routes_page(
     signage_id: int, request: Request, message: str = "", db: Session = Depends(get_db)
 ) -> HTMLResponse:
-    """Show every destination with the direction (if any) configured for it
-    on THIS signage - the "routing table" for one screen."""
+    """Show every destination grouped into a "bucket" for the direction (if
+    any) configured for it on THIS signage - see BUCKET_DIRECTIONS above.
+
+    Every destination is guaranteed to appear in exactly one bucket: new
+    (signage, destination) pairs are auto-created with direction "unset" (see
+    services.ensure_signage_routes/ensure_destination_routes), so there is
+    nothing here to "add" - only to move between buckets.
+    """
     signage = _get_signage_or_404(db, signage_id)
     destinations = list(db.scalars(select(Destination).order_by(Destination.name)))
     routes_by_destination = {
         route.destination_id: route
         for route in db.scalars(select(SignageRoute).where(SignageRoute.signage_id == signage_id))
     }
+
+    known_directions = {value for value, _label in BUCKET_DIRECTIONS}
+    buckets = [{"value": value, "label": label, "entries": []} for value, label in BUCKET_DIRECTIONS]
+    buckets_by_value = {bucket["value"]: bucket for bucket in buckets}
+    for destination in destinations:
+        route = routes_by_destination.get(destination.id)
+        # A missing row can only happen for data older than the backfill step
+        # (see services.backfill_all_signage_routes) - treat it the same as
+        # an explicit "unset" row so it still shows up (in the warning
+        # bucket) instead of silently disappearing from the page.
+        direction = route.direction if route and route.direction in known_directions else RouteDirection.UNSET.value
+        buckets_by_value[direction]["entries"].append({"destination": destination, "route": route})
+
     return templates.TemplateResponse(
         request,
         "dashboard/routes.html",
         {
             "signage": signage,
-            "destinations": destinations,
-            "routes_by_destination": routes_by_destination,
-            "directions": [d.value for d in RouteDirection],
+            "buckets": buckets,
             "message": message,
             "active": "signages",
         },
@@ -100,7 +137,12 @@ def save_signage_route(
     display_label: str = Form(""),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
-    """Create/update the route for one (signage, destination) pair."""
+    """Update the direction/custom label for one (signage, destination) pair.
+
+    Used by the small "Edit label" inline form on the routing page - the pair
+    itself always already exists (see ensure_signage_routes), so this is
+    always an update, never a create.
+    """
     signage = _get_signage_or_404(db, signage_id)
     destination = _get_destination_or_404(db, destination_id)
 
@@ -111,9 +153,11 @@ def save_signage_route(
         )
     )
     if route is None:
+        # Defensive fallback for pairs somehow missing this row - normally
+        # this never happens because of ensure_signage_routes.
         route = SignageRoute(signage_id=signage.id, destination_id=destination.id)
         db.add(route)
-    route.direction = direction.strip() or "straight"
+    route.direction = direction.strip() or "unset"
     route.display_label = display_label.strip() or None
     db.commit()
     return _redirect(
@@ -121,21 +165,44 @@ def save_signage_route(
     )
 
 
-@router.post("/signages/{signage_id}/routes/{destination_id}/delete")
-def delete_signage_route(
-    signage_id: int, destination_id: int, db: Session = Depends(get_db)
-) -> RedirectResponse:
-    """Remove a route so this signage falls back to the "See attendant" message."""
-    route = db.scalar(
-        select(SignageRoute).where(
-            SignageRoute.signage_id == signage_id,
-            SignageRoute.destination_id == destination_id,
-        )
-    )
-    if route is not None:
-        db.delete(route)
-        db.commit()
-    return _redirect(f"/signages/{signage_id}/routes", "Route removed")
+@router.post("/signages/{signage_id}/routes/bulk-update")
+def bulk_update_signage_routes(
+    signage_id: int,
+    updates: dict[int, str],
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    """Batch-save direction bucket moves (Improvement 2).
+
+    Body: a JSON object mapping ``destination_id`` (as a string key, coerced
+    to int by FastAPI/Pydantic) to the new ``direction`` bucket it was dropped
+    into, e.g. ``{"3": "left", "7": "straight"}``. Every (signage,
+    destination) pair already exists (see ensure_signage_routes) so this is
+    always an update of the ``direction`` column, never a create/delete -
+    matching the rule that destinations are never added/removed from a
+    signage's routing, only re-bucketed.
+    """
+    signage = _get_signage_or_404(db, signage_id)
+    routes_by_destination = {
+        route.destination_id: route
+        for route in db.scalars(select(SignageRoute).where(SignageRoute.signage_id == signage.id))
+    }
+
+    updated = 0
+    for destination_id, direction in updates.items():
+        direction = (direction or "").strip() or "unset"
+        route = routes_by_destination.get(destination_id)
+        if route is None:
+            # Defensive fallback: shouldn't happen thanks to the backfill,
+            # but don't silently drop a move if it does.
+            destination = db.get(Destination, destination_id)
+            if destination is None:
+                continue
+            route = SignageRoute(signage_id=signage.id, destination_id=destination_id)
+            db.add(route)
+        route.direction = direction
+        updated += 1
+    db.commit()
+    return JSONResponse({"updated": updated})
 
 
 # --------------------------------------------------------------------------- #
@@ -182,6 +249,33 @@ async def map_upload_submit(
     map_settings.image_path = f"uploads/{stored_name}"
     db.commit()
     return _redirect("/", "Map image uploaded")
+
+
+@router.post("/map/positions")
+def update_map_positions(
+    updates: list[MapPositionUpdate], db: Session = Depends(get_db)
+) -> JSONResponse:
+    """Batch-save marker positions dragged on the Map View (Improvement 1).
+
+    Body: a JSON array of ``{"type": "signage"|"destination", "id": <int>,
+    "x": <0-100>, "y": <0-100>}``. This is the primary way to set positions
+    now (see the drag-and-drop JS in dashboard/index.html) - the manual
+    numeric forms below (``/signages/{id}/position`` etc.) remain as a
+    fallback/advanced option, e.g. for precise placement.
+    """
+    updated = 0
+    for update in updates:
+        if update.type == "signage":
+            item: Signage | Destination | None = db.get(Signage, update.id)
+        else:
+            item = db.get(Destination, update.id)
+        if item is None:
+            continue
+        item.map_x = update.x
+        item.map_y = update.y
+        updated += 1
+    db.commit()
+    return JSONResponse({"updated": updated})
 
 
 @router.get("/signages/{signage_id}/position", response_class=HTMLResponse)
