@@ -1,0 +1,27 @@
+{% extends "dashboard/base.html" %}
+{% block title %}Upload site map - Smart Car Navigation{% endblock %}
+
+{% block content %}
+<h1>Upload site map image</h1>
+<p>
+  Upload a top-down photo, floor plan or scanned drawing of the site. It is
+  used as the background of the <a href="/">Map View</a> on the dashboard, so
+  signages and destinations can be placed on it as markers.
+</p>
+
+<section class="panel">
+  {% if map_settings.image_path %}
+    <p>Current map image:</p>
+    <img src="/static/{{ map_settings.image_path }}" alt="Current site map"
+         style="max-width: 100%; border: 1px solid #e1e6ed; border-radius: 6px;">
+  {% else %}
+    <p class="empty">No map image uploaded yet.</p>
+  {% endif %}
+
+  <form method="post" action="/map/upload" enctype="multipart/form-data" class="inline-form">
+    <input type="file" name="file" accept="image/png,image/jpeg,image/gif,image/webp" required>
+    <button type="submit">Upload &amp; replace</button>
+  </form>
+  <p><small>PNG, JPG, GIF or WEBP, max 8&nbsp;MB.</small></p>
+</section>
+{% endblock %}

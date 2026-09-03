@@ -41,7 +41,9 @@ One backend application exposes three interfaces:
 | Interface | URL | Audience |
 | --- | --- | --- |
 | Detection webhook | `POST /api/detections` | Dahua cameras (machine to machine) |
-| Admin / guard dashboard | `/`, `/vehicles`, `/csv-import`, `/logs`, `/signages` | security guard / admin, in a browser |
+| Admin / guard dashboard | `/` (Map View), `/vehicles`, `/csv-import`, `/logs`, `/signages` | security guard / admin, in a browser |
+| Signage routing table | `/signages/{id}/routes` | admin, configures per-signage direction |
+| Map View upload/position | `/map/upload`, `/signages/{id}/position`, `/destinations/{id}/position` | admin, configures the Map View |
 | Signage display | `/signage/{signage_code}` | the screen itself, no human interaction |
 | Interactive API docs | `/docs` | you, while developing |
 
@@ -92,8 +94,9 @@ and the signage screens, not only from the mini PC itself.
 python scripts/seed_data.py            # or: curl -X POST http://127.0.0.1:8000/api/seed
 ```
 
-This creates destinations `Lot A/B/C`, signage `SIGN-01`, camera
-`CAM-ENTRANCE-01` and two sample plates.
+This creates destinations `Lot A/B/C`, two signages (`SIGN-01`, `SIGN-02`) each
+with their own camera, per-signage routing (see section 5a - e.g. `Lot A` is
+"left" from `SIGN-01` but "straight" from `SIGN-02`) and two sample plates.
 
 ### Useful URLs
 
@@ -189,6 +192,60 @@ falls back to the idle screen.
 
 ---
 
+## 5a. Per-signage routing (direction depends on WHERE the signage is)
+
+**Important design point:** `destinations` (e.g. "Tower A") no longer carries
+a fixed direction. The correct direction depends on *which signage* is
+showing it — a destination might be "turn right" from the signage at the
+entrance and "go straight" from a second signage further down the road, even
+though it's the exact same destination. This is modelled with a
+`signage_routes` table: one row per `(signage, destination)` pair, holding
+the `direction` (left/right/straight/u_turn, or any custom word) and an
+optional custom `display_label` message.
+
+To configure it:
+
+1. Go to `/signages` and click **"Routing table"** next to a signage.
+2. For each destination, pick a direction (and, optionally, type a custom
+   message instead of the default "`<destination>` - `<direction>`" text).
+3. Repeat for every other signage — the same destination can have a totally
+   different direction configured there.
+
+**What happens if a signage was never configured for a destination?** The
+screen falls back to a safe message (`See attendant` by default, configurable
+via `UNROUTED_MESSAGE`) instead of guessing a direction, and a warning is
+logged server-side so you notice the gap. This shows up as `"state": "unrouted"`
+on the polling API.
+
+---
+
+## 5b. Dashboard Map View
+
+The dashboard landing page (`/`) shows a **Map View**: your uploaded site map
+image with clickable pins for every signage and destination that has a map
+position set.
+
+* **Upload the map image:** go to `/map/upload` and upload a PNG/JPG/GIF/WEBP
+  (max 8 MB) — a photo, floor plan or scanned drawing of the site. It is
+  stored under `app/static/uploads/` and remembered in the single-row
+  `map_settings` table.
+* **Set a marker's position:** on `/signages`, each signage/destination has a
+  **"Map position"** link — a simple form where you type X/Y as percentages
+  (0-100) of the image's width/height (e.g. "50, 50" is the dead centre).
+  Leave both blank to remove the marker.
+* **Using the map:** click 🖥️ (signage) or 📍 (destination) markers to open a
+  details panel — for a signage this shows its location, what it is
+  currently displaying (live, from `signage_current_state`), and links to its
+  routing table and its position editor; for a destination it links to its
+  position editor.
+* **Possible future enhancement:** this iteration deliberately uses simple
+  numeric inputs rather than drag-and-drop marker placement, to keep the
+  implementation small. Drag-and-drop (dragging the pin directly on the map
+  image and saving the resulting percentage) would be a nice usability
+  upgrade later.
+
+---
+
 ## 6. CSV import (pre-registered vehicles)
 
 Go to `/csv-import` and upload a UTF-8 CSV with a header row:
@@ -202,8 +259,8 @@ XY9999,Lot B,Monthly tenant
 * `plate_number` — **required**; spaces, dashes and dots are ignored when
   matching (`EF-2020` and `ef 2020` are the same car).
 * `destination_name` — **required**; a destination that does not exist yet is
-  created automatically (with direction hint `straight`, which you can then
-  change on `/signages`).
+  created automatically (just the name — direction is configured separately,
+  per signage; see section 5a below).
 * `notes` — optional.
 
 A plate that already exists is **updated**, not duplicated. Rows with missing
@@ -249,6 +306,7 @@ Set these as environment variables (or in `docker-compose.yml`):
 | `DATABASE_URL` | `sqlite:///./data/smart_car_navigation.db` | Database location. Use a PostgreSQL URL to migrate later. |
 | `DISPLAY_TTL_SECONDS` | `15` | How long a message stays on a screen before idle. |
 | `UNREGISTERED_MESSAGE` | `Please proceed to the guard booth` | Shown when a plate is unknown. |
+| `UNROUTED_MESSAGE` | `See attendant` | Shown when the destination is known but this signage has no route configured for it. |
 
 ---
 
@@ -259,20 +317,26 @@ app/
   main.py             FastAPI app, startup, /healthz, /api/seed
   database.py         SQLAlchemy engine/session + init_db()
   models.py           vehicles, destinations, signages, cameras,
-                      detection_events, signage_current_state
+                      signage_routes, map_settings, detection_events,
+                      signage_current_state
   schemas.py          JSON request/response shapes
-  services.py         business logic (plate matching, detections, CSV import)
+  services.py         business logic (plate matching, detections,
+                      per-signage route resolution, CSV import)
   seed.py             sample data
   templating.py       shared Jinja2 environment
   routers/
     detections.py     POST /api/detections  (camera webhook)
-    admin.py          dashboard pages and forms
+    admin.py          dashboard/Map View landing page, vehicles, CSV, logs,
+                      signages/cameras/destinations management
+    map_admin.py      signage routing tables, map image upload, marker positions
     signage.py        /signage/{code} + /api/signage/{code}/current
   templates/
-    dashboard/        base.html, index.html, vehicles.html,
-                      csv_import.html, logs.html, signages.html
+    dashboard/        base.html, index.html (Map View), vehicles.html,
+                      csv_import.html, logs.html, signages.html, routes.html,
+                      map_upload.html, position.html
     signage/          display.html
   static/             dashboard.css, signage.css, signage.js
+  static/uploads/     uploaded site map images (not committed - see .gitignore)
 scripts/
   seed_data.py               create sample data from the command line
   simulate_camera_event.py   fake a camera detection for local testing
@@ -304,6 +368,9 @@ These were intentionally left out of this first scaffold:
   plate → destination. The `destinations` table is deliberately free of
   constraints that would block adding `capacity` / `current_occupancy` columns
   later.
+* **No drag-and-drop marker placement on the Map View.** Positions are set via
+  a simple numeric (percentage) form for now - see section 5b. Drag-and-drop
+  would be a nice future enhancement.
 * **Snapshots are not stored as files.** The base64 image sent by the camera is
   kept inside the raw payload only.
 * **No HTTPS.** Not required on an isolated LAN, but worth adding if the network

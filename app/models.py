@@ -5,10 +5,19 @@ Entity overview::
     destinations  <-- vehicles          (where a plate should be sent)
     destinations  <-- signage_current_state
     signages      <-- cameras           (a camera updates one signage)
+    signages      <-- signage_routes --> destinations (per-signage direction)
     cameras       <-- detection_events  (raw audit trail of every plate read)
 
 Everything is plain SQLAlchemy ORM so the same models work on SQLite (today) and
 PostgreSQL (later) without changes.
+
+Note on ``map_x`` / ``map_y`` (Problem 2, the dashboard Map View): rather than a
+separate "generic map_position" table, the coordinates are simple nullable
+columns directly on ``signages`` and ``destinations``. This is the simplest
+option for a solo-maintained project - one row already *is* one marker, so a
+separate table would only add a join for no real benefit. Coordinates are
+percentages (0-100) of the uploaded map image's width/height, which keeps the
+markers correctly positioned regardless of the screen size viewing the map.
 """
 
 from __future__ import annotations
@@ -43,22 +52,48 @@ class VehicleSource(str, enum.Enum):
     MANUAL_GUARD = "manual_guard"  # typed in by a security guard at the gate
 
 
+class RouteDirection(str, enum.Enum):
+    """Direction shown on a signage for one of its configured destinations.
+
+    Kept as a plain string column (not a DB-level ``Enum``) so a guard can type
+    a custom short word later without a migration - these four are just the
+    values offered by the admin UI dropdown.
+    """
+
+    LEFT = "left"
+    RIGHT = "right"
+    STRAIGHT = "straight"
+    U_TURN = "u_turn"
+
+
 class Destination(Base):
-    """A place a car can be routed to, e.g. "Lot A"."""
+    """A place a car can be routed to, e.g. "Lot A".
+
+    NOTE: this is deliberately just a name/label now. There used to be a fixed
+    ``direction_hint`` column here, but that was wrong: the correct direction
+    depends on *which signage* is showing it (a destination might be "turn
+    right" from one screen and "go straight" from another, further down the
+    road). Per-signage direction now lives in ``SignageRoute`` below.
+    """
 
     __tablename__ = "destinations"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String(100), unique=True, index=True, nullable=False)
-    # Free text hint used by the signage page to pick an arrow: left/right/straight.
-    direction_hint: Mapped[str] = mapped_column(String(20), default="straight", nullable=False)
+    # Marker position on the uploaded site map, as a percentage (0-100) of the
+    # image's width/height. NULL means "not placed on the map yet".
+    map_x: Mapped[float | None] = mapped_column(Float, nullable=True)
+    map_y: Mapped[float | None] = mapped_column(Float, nullable=True)
     # NOTE: capacity/occupancy fields (e.g. capacity, current_occupancy) can be
     # added here later without touching any other table.
 
     vehicles: Mapped[list["Vehicle"]] = relationship(back_populates="destination")
+    routes: Mapped[list["SignageRoute"]] = relationship(
+        back_populates="destination", cascade="all, delete-orphan"
+    )
 
     def __repr__(self) -> str:  # pragma: no cover - debugging helper
-        return f"<Destination {self.name} ({self.direction_hint})>"
+        return f"<Destination {self.name}>"
 
 
 class Vehicle(Base):
@@ -100,10 +135,17 @@ class Signage(Base):
     # "left/right" or "Lot A, Lot B, Lot C". Kept as text on purpose so the
     # guard can describe the physical screen without a rigid schema.
     supported_directions: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Marker position on the uploaded site map (percentage 0-100). See the
+    # note about map_x/map_y at the top of this file.
+    map_x: Mapped[float | None] = mapped_column(Float, nullable=True)
+    map_y: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     cameras: Mapped[list["Camera"]] = relationship(back_populates="signage")
     current_state: Mapped["SignageCurrentState | None"] = relationship(
         back_populates="signage", uselist=False, cascade="all, delete-orphan"
+    )
+    routes: Mapped[list["SignageRoute"]] = relationship(
+        back_populates="signage", cascade="all, delete-orphan"
     )
 
     def __repr__(self) -> str:  # pragma: no cover - debugging helper
@@ -129,6 +171,61 @@ class Camera(Base):
 
     def __repr__(self) -> str:  # pragma: no cover - debugging helper
         return f"<Camera {self.code}>"
+
+
+class SignageRoute(Base):
+    """The direction one specific signage shows for one specific destination.
+
+    This is the fix for "direction depends on WHERE the signage is, not on the
+    destination itself": the same destination can have a different route (and
+    even a different custom message) configured per signage, e.g.::
+
+        SIGN-01 -> Tower A -> "right"
+        SIGN-02 -> Tower A -> "straight"   (further down the road)
+
+    A signage with no row here for a given destination has simply not been
+    configured yet - see ``services.resolve_signage_route`` for the fallback
+    behaviour used in that case.
+    """
+
+    __tablename__ = "signage_routes"
+    __table_args__ = (
+        UniqueConstraint("signage_id", "destination_id", name="uq_signage_route_pair"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    signage_id: Mapped[int] = mapped_column(ForeignKey("signages.id"), nullable=False)
+    destination_id: Mapped[int] = mapped_column(ForeignKey("destinations.id"), nullable=False)
+    # Free text on purpose (see RouteDirection) - the admin UI offers the four
+    # common values but nothing stops a guard typing something else.
+    direction: Mapped[str] = mapped_column(String(20), default="straight", nullable=False)
+    # Optional custom message shown instead of "<direction> to <destination>",
+    # e.g. "Visitor parking is on your right, past the barrier".
+    display_label: Mapped[str | None] = mapped_column(String(200), nullable=True)
+
+    signage: Mapped[Signage] = relationship(back_populates="routes")
+    destination: Mapped[Destination] = relationship(back_populates="routes")
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging helper
+        return f"<SignageRoute signage={self.signage_id} destination={self.destination_id} {self.direction}>"
+
+
+class MapSettings(Base):
+    """Site-wide settings for the dashboard Map View (Problem 2).
+
+    Single-row table (there is only ever one site map) - simpler than adding a
+    generic key/value settings table for just one value.
+    """
+
+    __tablename__ = "map_settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    # Path (relative to /static) of the uploaded background map image, e.g.
+    # "uploads/site-map.png". NULL until an admin uploads one.
+    image_path: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
 
 
 class DetectionEvent(Base):

@@ -23,7 +23,7 @@ from sqlalchemy.orm import Session
 
 from app import __version__
 from app.database import get_db, init_db
-from app.routers import admin, detections, signage
+from app.routers import admin, detections, map_admin, signage
 from app.schemas import SeedResult
 from app.seed import seed
 from app.templating import STATIC_DIR
@@ -46,6 +46,7 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 app.include_router(detections.router)
 app.include_router(signage.router)
 app.include_router(admin.router)
+app.include_router(map_admin.router)
 
 
 @app.get("/healthz", tags=["ops"])

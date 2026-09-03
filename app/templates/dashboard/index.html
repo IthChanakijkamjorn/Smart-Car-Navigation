@@ -2,7 +2,81 @@
 {% block title %}Dashboard - Smart Car Navigation{% endblock %}
 
 {% block content %}
-<h1>Dashboard</h1>
+<h1>Dashboard - Map View</h1>
+
+<section class="panel">
+  <h2>Site map</h2>
+  <p>
+    Click a marker for details. 🖥️ signages, 📍 destinations. Only items with a
+    map position set (see "Map position" links on the
+    <a href="/signages">Signages &amp; Cameras</a> page) show up here.
+  </p>
+  <div class="map-container" id="map-container">
+    {% if map_settings.image_path %}
+      <img src="/static/{{ map_settings.image_path }}" class="map-image" alt="Site map">
+    {% else %}
+      <div class="map-placeholder">No map image uploaded yet - markers are still placed below.</div>
+    {% endif %}
+    {% for marker in signage_markers %}
+      <div class="marker marker-signage"
+           style="left: {{ marker.item.map_x }}%; top: {{ marker.item.map_y }}%;"
+           data-type="signage"
+           data-title="{{ marker.item.code }} - {{ marker.item.name }}"
+           data-location="{{ marker.item.location or 'no location set' }}"
+           data-status="{{ marker.status }}"
+           data-routes-url="/signages/{{ marker.item.id }}/routes"
+           data-position-url="/signages/{{ marker.item.id }}/position"
+           title="{{ marker.item.code }} - {{ marker.item.name }}">🖥️</div>
+    {% endfor %}
+    {% for marker in destination_markers %}
+      <div class="marker marker-destination"
+           style="left: {{ marker.item.map_x }}%; top: {{ marker.item.map_y }}%;"
+           data-type="destination"
+           data-title="{{ marker.item.name }}"
+           data-position-url="/destinations/{{ marker.item.id }}/position"
+           title="{{ marker.item.name }}">📍</div>
+    {% endfor %}
+  </div>
+
+  {# Simple click-to-show details panel - no framework, just vanilla JS. #}
+  <div id="marker-details" class="marker-details" hidden>
+    <button type="button" id="marker-details-close" class="button-link">Close</button>
+    <div id="marker-details-body"></div>
+  </div>
+  <script>
+    (function () {
+      "use strict";
+      var details = document.getElementById("marker-details");
+      var body = document.getElementById("marker-details-body");
+      document.getElementById("marker-details-close").addEventListener("click", function () {
+        details.hidden = true;
+      });
+      document.querySelectorAll(".marker").forEach(function (marker) {
+        marker.addEventListener("click", function () {
+          var d = marker.dataset;
+          var html = "<h3>" + d.title + "</h3>";
+          if (d.type === "signage") {
+            html += "<p>Location: " + d.location + "</p>";
+            html += "<p>Currently showing: <strong>" + d.status + "</strong></p>";
+            html += "<p><a href=\"" + d.routesUrl + "\">Edit routing table</a> &middot; ";
+            html += "<a href=\"" + d.positionUrl + "\">Edit map position</a></p>";
+          } else {
+            html += "<p><a href=\"" + d.positionUrl + "\">Edit map position</a></p>";
+            html += "<p><a href=\"/vehicles\">See vehicles routed here</a></p>";
+          }
+          body.innerHTML = html;
+          details.hidden = false;
+        });
+      });
+    })();
+  </script>
+  {% if not map_settings.image_path %}
+    <p class="empty">
+      No map image uploaded yet. <a href="/map/upload">Upload one</a> for a visual background.
+    </p>
+  {% endif %}
+  <p><a href="/map/upload">Upload / replace the site map image</a></p>
+</section>
 
 <section class="cards">
   <div class="card"><span class="big">{{ stats.vehicles }}</span> registered plates</div>

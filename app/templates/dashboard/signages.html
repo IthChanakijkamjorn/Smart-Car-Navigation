@@ -6,26 +6,24 @@
 
 <section class="panel">
   <h2>Destinations</h2>
-  <p>Where cars can be sent. The direction hint picks the arrow shown on screen.</p>
+  <p>
+    Where cars can be sent. Destinations are just a name/label now - the
+    direction shown on screen is configured <em>per signage</em> using each
+    signage's "Routing table" (see below), because the same destination can
+    need a different direction depending on which screen is showing it.
+  </p>
   <form method="post" action="/destinations" class="inline-form">
     <label>Name <input type="text" name="name" placeholder="Lot A" required></label>
-    <label>Direction hint
-      <select name="direction_hint">
-        <option value="left">left</option>
-        <option value="right">right</option>
-        <option value="straight" selected>straight</option>
-      </select>
-    </label>
     <button type="submit">Save destination</button>
   </form>
   <table>
-    <thead><tr><th>Name</th><th>Direction hint</th><th></th></tr></thead>
+    <thead><tr><th>Name</th><th></th></tr></thead>
     <tbody>
       {% for destination in destinations %}
         <tr>
           <td>{{ destination.name }}</td>
-          <td>{{ destination.direction_hint }}</td>
           <td>
+            <a class="button-link" href="/destinations/{{ destination.id }}/position">Map position</a>
             <form method="post" action="/destinations/{{ destination.id }}/delete"
                   onsubmit="return confirm('Delete {{ destination.name }}?');">
               <button type="submit" class="danger">Delete</button>
@@ -33,7 +31,7 @@
           </td>
         </tr>
       {% else %}
-        <tr><td colspan="3" class="empty">No destinations yet.</td></tr>
+        <tr><td colspan="2" class="empty">No destinations yet.</td></tr>
       {% endfor %}
     </tbody>
   </table>
@@ -68,6 +66,8 @@
             </a>
           </td>
           <td>
+            <a class="button-link" href="/signages/{{ signage.id }}/routes">Routing table</a>
+            <a class="button-link" href="/signages/{{ signage.id }}/position">Map position</a>
             <form method="post" action="/signages/{{ signage.id }}/delete"
                   onsubmit="return confirm('Delete {{ signage.code }}?');">
               <button type="submit" class="danger">Delete</button>

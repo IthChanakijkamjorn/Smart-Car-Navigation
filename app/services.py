@@ -12,6 +12,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import logging
 import os
 import re
 from dataclasses import dataclass, field
@@ -25,12 +26,16 @@ from app.models import (
     Camera,
     DetectionEvent,
     Destination,
+    MapSettings,
     Signage,
     SignageCurrentState,
+    SignageRoute,
     Vehicle,
     VehicleSource,
     utcnow,
 )
+
+logger = logging.getLogger(__name__)
 
 # How long a message stays on a screen before it falls back to the idle state.
 # A car needs only a few seconds to drive past the sign, so ~15s is plenty.
@@ -39,6 +44,11 @@ DISPLAY_TTL_SECONDS = int(os.getenv("DISPLAY_TTL_SECONDS", "15"))
 # Message shown when a detected plate is not registered. The guard is expected
 # to add the vehicle manually from the dashboard.
 UNREGISTERED_MESSAGE = os.getenv("UNREGISTERED_MESSAGE", "Please proceed to the guard booth")
+
+# Message shown when the plate IS registered and matched to a destination, but
+# nobody has configured a route (direction) for THIS signage yet. This is the
+# "signage hasn't been configured for that destination" fallback from Problem 1.
+UNROUTED_MESSAGE = os.getenv("UNROUTED_MESSAGE", "See attendant")
 
 _PLATE_CLEANUP_RE = re.compile(r"[\s\-_.]+")
 
@@ -59,6 +69,32 @@ def find_vehicle_by_plate(db: Session, plate: str) -> Vehicle | None:
     if not normalized:
         return None
     return db.scalar(select(Vehicle).where(Vehicle.plate_number == normalized))
+
+
+def resolve_signage_route(
+    db: Session, signage_id: int, destination_id: int
+) -> SignageRoute | None:
+    """Find the per-signage direction configured for a destination.
+
+    Returns ``None`` when this signage has never been configured for that
+    destination - callers should fall back to ``UNROUTED_MESSAGE`` in that
+    case (see ``build_display_message`` below).
+    """
+    return db.scalar(
+        select(SignageRoute).where(
+            SignageRoute.signage_id == signage_id,
+            SignageRoute.destination_id == destination_id,
+        )
+    )
+
+
+def build_display_message(route: SignageRoute | None, destination: Destination) -> str:
+    """The text shown on screen once a destination + signage route are known."""
+    if route is None:
+        return UNROUTED_MESSAGE
+    if route.display_label:
+        return route.display_label
+    return f"{destination.name} - {route.direction}"
 
 
 def set_signage_state(
@@ -101,6 +137,7 @@ class DetectionResult:
     destination: Destination | None
     signage: Signage | None
     matched: bool
+    route: SignageRoute | None = None
 
 
 def process_detection(
@@ -114,7 +151,8 @@ def process_detection(
     """Handle one plate detection pushed by a camera.
 
     Steps: log the raw event -> look up the plate -> resolve the destination ->
-    update the current display command of the signage linked to that camera.
+    look up the signage_route for (signage, destination) -> update the current
+    display command of the signage linked to that camera.
     """
     camera = None
     if camera_code:
@@ -134,7 +172,20 @@ def process_detection(
     db.add(event)
 
     signage = camera.signage if camera else None
+    route: SignageRoute | None = None
     if signage is not None:
+        if destination is not None:
+            route = resolve_signage_route(db, signage.id, destination.id)
+            if route is None:
+                # This signage has never been told what direction to show for
+                # this destination - log it so the guard/installer notices and
+                # configures it on /signages/{id}/routes.
+                logger.warning(
+                    "No signage_route configured for signage=%s destination=%s "
+                    "(showing fallback message)",
+                    signage.code,
+                    destination.name,
+                )
         # Unregistered plates still update the screen: it switches to the
         # "unregistered" message so the driver knows to stop at the booth.
         set_signage_state(db, signage, destination, normalize_plate(plate_number))
@@ -147,6 +198,7 @@ def process_detection(
         destination=destination,
         signage=signage,
         matched=vehicle is not None,
+        route=route,
     )
 
 
@@ -224,7 +276,7 @@ def get_or_create_destination(db: Session, name: str) -> Destination:
     """Find a destination by name, creating it if the CSV mentions a new one."""
     destination = db.scalar(select(Destination).where(Destination.name == name))
     if destination is None:
-        destination = Destination(name=name, direction_hint="straight")
+        destination = Destination(name=name)
         db.add(destination)
         db.flush()
     return destination
@@ -261,3 +313,19 @@ def import_vehicles_csv(
 
     db.commit()
     return result
+
+
+# --------------------------------------------------------------------------- #
+# Map View (Problem 2) - a single settings row holding the uploaded map image.
+# --------------------------------------------------------------------------- #
+
+
+def get_or_create_map_settings(db: Session) -> MapSettings:
+    """Return the single ``MapSettings`` row, creating it on first use."""
+    settings = db.scalar(select(MapSettings))
+    if settings is None:
+        settings = MapSettings()
+        db.add(settings)
+        db.commit()
+        db.refresh(settings)
+    return settings

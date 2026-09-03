@@ -27,6 +27,7 @@ from app.models import (
     Camera,
     DetectionEvent,
     Destination,
+    MapSettings,
     Signage,
     SignageCurrentState,
     Vehicle,
@@ -56,7 +57,11 @@ def _destinations(db: Session) -> list[Destination]:
 
 @router.get("/", response_class=HTMLResponse)
 def dashboard_home(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
-    """Overview page with a few counters and the list of signage links."""
+    """Dashboard landing page: overview counters + the Map View (Problem 2).
+
+    The Map View renders the uploaded site map image (if any) with clickable
+    markers for every signage/destination that has a map position set.
+    """
     stats = {
         "vehicles": db.scalar(select(func.count()).select_from(Vehicle)) or 0,
         "destinations": db.scalar(select(func.count()).select_from(Destination)) or 0,
@@ -67,13 +72,41 @@ def dashboard_home(request: Request, db: Session = Depends(get_db)) -> HTMLRespo
     recent_events = list(
         db.scalars(select(DetectionEvent).order_by(DetectionEvent.created_at.desc()).limit(10))
     )
+    all_signages = list(db.scalars(select(Signage).order_by(Signage.code)))
+    all_destinations = _destinations(db)
+    map_settings = services.get_or_create_map_settings(db)
+
+    # Build the marker list for the map: only items that have been placed
+    # (map_x/map_y both set) show up as a pin. Signage markers carry a small
+    # "live status" summary so the click-modal can show what the screen is
+    # currently displaying without another request.
+    signage_markers = []
+    for s in all_signages:
+        if s.map_x is None or s.map_y is None:
+            continue
+        state = s.current_state
+        if state is None or services.is_state_expired(state):
+            status = "idle"
+        elif state.current_destination is None:
+            status = "unregistered"
+        else:
+            status = f"guiding -> {state.current_destination.name}"
+        signage_markers.append({"item": s, "status": status})
+
+    destination_markers = [
+        {"item": d} for d in all_destinations if d.map_x is not None and d.map_y is not None
+    ]
+
     return templates.TemplateResponse(
         request,
         "dashboard/index.html",
         {
             "stats": stats,
             "recent_events": recent_events,
-            "signages": list(db.scalars(select(Signage).order_by(Signage.code))),
+            "signages": all_signages,
+            "map_settings": map_settings,
+            "signage_markers": signage_markers,
+            "destination_markers": destination_markers,
             "active": "dashboard",
         },
     )
@@ -310,10 +343,9 @@ def delete_camera(camera_id: int, db: Session = Depends(get_db)) -> RedirectResp
 @router.post("/destinations")
 def create_or_update_destination(
     name: str = Form(...),
-    direction_hint: str = Form("straight"),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
-    """Add or update a destination (e.g. "Lot A" shown with a left arrow)."""
+    """Add or update a destination (just a name/label - see SignageRoute for direction)."""
     name = name.strip()
     if not name:
         return _redirect("/signages", "Destination name is required")
@@ -322,7 +354,6 @@ def create_or_update_destination(
     if destination is None:
         destination = Destination(name=name)
         db.add(destination)
-    destination.direction_hint = direction_hint.strip() or "straight"
     db.commit()
     return _redirect("/signages", f"Saved destination {name}")
 

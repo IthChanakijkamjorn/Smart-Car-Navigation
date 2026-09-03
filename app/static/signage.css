@@ -48,6 +48,8 @@ body.state-idle .destination { font-size: 8vh; font-weight: 600; text-transform:
 body.state-guiding { background: #073b16; color: #eaffef; }
 body.state-unregistered { background: #4a2f00; color: #fff3cd; }
 body.state-unregistered .destination { font-size: 8vh; }
+body.state-unrouted { background: #4a1c1c; color: #ffd6d6; }
+body.state-unrouted .destination { font-size: 8vh; }
 
 .corner {
   position: fixed;

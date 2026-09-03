@@ -49,7 +49,8 @@ class DetectionOut(BaseModel):
     plate_number: str
     matched: bool
     destination: str | None = None
-    direction_hint: str | None = None
+    direction: str | None = None
+    route_configured: bool = False
     signage_code: str | None = None
     message: str
 
@@ -60,9 +61,10 @@ class SignageCurrentOut(BaseModel):
     signage_id: int
     signage_code: str
     signage_name: str
-    state: str = Field(description="'idle', 'guiding' or 'unregistered'")
+    state: str = Field(description="'idle', 'guiding', 'unrouted' or 'unregistered'")
     destination: str | None = None
-    direction_hint: str | None = None
+    direction: str | None = None
+    route_configured: bool = False
     plate_number: str | None = None
     message: str
     last_updated_at: datetime | None = None
