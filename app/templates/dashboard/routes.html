@@ -4,56 +4,184 @@
 {% block content %}
 <h1>Routing table - {{ signage.code }} ({{ signage.name }})</h1>
 <p>
-  This is the direction shown on <strong>this signage only</strong> for each
-  destination. The same destination can (and often should) have a different
-  direction configured on a different signage - see the README for why.
+  Destinations are grouped into "direction buckets" for <strong>this signage
+  only</strong>. Drag a destination card into the bucket matching the
+  direction a driver should be sent when looking at THIS screen - the same
+  destination can (and often should) sit in a different bucket on a different
+  signage, since the correct direction depends on where the signage is.
+</p>
+<p>
+  Every destination always appears in exactly one bucket - there is nothing
+  to "add", only to move. New destinations start in the highlighted
+  <strong>Unset / Not configured</strong> bucket, so it is obvious at a
+  glance what still needs setting up for this signage.
 </p>
 <p>
   <a href="/signages">&larr; Back to signages &amp; cameras</a>
 </p>
 
-<table>
-  <thead>
-    <tr><th>Destination</th><th>Direction &amp; message</th><th>Status</th><th></th></tr>
-  </thead>
-  <tbody>
-    {% for destination in destinations %}
-      {% set route = routes_by_destination.get(destination.id) %}
-      <tr>
-        <td>{{ destination.name }}</td>
-        <td>
-          <form method="post" action="/signages/{{ signage.id }}/routes" class="row-form">
-            <input type="hidden" name="destination_id" value="{{ destination.id }}">
-            <select name="direction">
-              {% for direction in directions %}
-                <option value="{{ direction }}"
-                  {{ 'selected' if route and route.direction == direction }}>
-                  {{ direction }}
-                </option>
-              {% endfor %}
-            </select>
-            <input type="text" name="display_label" placeholder="e.g. Visitor parking on your right"
-                   value="{{ route.display_label if route else '' }}">
-            <button type="submit">Save</button>
-          </form>
-        </td>
-        <td>
-          {% if route %}configured
-          {% else %}<span class="warn">not configured - shows "See attendant"</span>{% endif %}
-        </td>
-        <td>
-          {% if route %}
-            <form method="post"
-                  action="/signages/{{ signage.id }}/routes/{{ destination.id }}/delete"
-                  onsubmit="return confirm('Remove this route?');">
-              <button type="submit" class="danger">Remove</button>
-            </form>
-          {% endif %}
-        </td>
-      </tr>
-    {% else %}
-      <tr><td colspan="4" class="empty">No destinations yet.</td></tr>
-    {% endfor %}
-  </tbody>
-</table>
+<div id="routes-toolbar" class="edit-toolbar">
+  <button type="button" id="routes-save">Save changes</button>
+  <button type="button" id="routes-discard">Discard changes</button>
+  <span id="routes-status" class="empty"></span>
+</div>
+
+<div class="bucket-board" id="bucket-board">
+  {% for bucket in buckets %}
+    <div class="bucket-column{{ ' bucket-unset' if bucket.value == 'unset' else '' }}">
+      <h3>{{ bucket.label }} <span class="bucket-count">({{ bucket.entries|length }})</span></h3>
+      <ul class="bucket-list" data-direction="{{ bucket.value }}">
+        {% for entry in bucket.entries %}
+          <li class="bucket-item" draggable="true"
+              data-destination-id="{{ entry.destination.id }}"
+              data-display-label="{{ entry.route.display_label if entry.route and entry.route.display_label else '' }}">
+            <span class="bucket-item-name">{{ entry.destination.name }}</span>
+            {% if entry.route and entry.route.display_label %}
+              <span class="bucket-item-label">&ldquo;{{ entry.route.display_label }}&rdquo;</span>
+            {% endif %}
+            <button type="button" class="button-link edit-label-btn">Edit label</button>
+          </li>
+        {% else %}
+          <li class="empty bucket-empty">(none)</li>
+        {% endfor %}
+      </ul>
+    </div>
+  {% endfor %}
+</div>
+
+{# Tiny inline "modal" (just a hidden panel, no library) for setting the
+   optional custom display_label of one destination on this signage. This
+   posts straight to the existing single-route form endpoint - it is
+   deliberately NOT part of the drag-and-drop batch save, so a label edit
+   takes effect immediately without needing "Save changes". #}
+<div id="label-modal" class="marker-details" hidden>
+  <button type="button" id="label-modal-close" class="button-link">Close</button>
+  <form method="post" action="/signages/{{ signage.id }}/routes">
+    <input type="hidden" name="destination_id" id="label-modal-destination-id">
+    <input type="hidden" name="direction" id="label-modal-direction">
+    <p id="label-modal-title"></p>
+    <label>Custom message (optional, overrides "&lt;destination&gt; - &lt;direction&gt;")
+      <input type="text" name="display_label" id="label-modal-input"
+             placeholder="e.g. Visitor parking on your right">
+    </label>
+    <button type="submit">Save label</button>
+  </form>
+</div>
+
+<script>
+  (function () {
+    "use strict";
+
+    // ------------------------------------------------------------------- //
+    // Drag-and-drop between direction buckets (Improvement 2).
+    //
+    // Uses the browser's built-in HTML5 drag-and-drop events (dragstart on
+    // the item being picked up, dragover/drop on the bucket list it lands
+    // on) rather than a library - it is a handful of events and is the right
+    // tool here because we are moving whole list items between containers
+    // (as opposed to the free-form pixel dragging used for map markers,
+    // which uses Pointer Events instead - see index.html).
+    //
+    // IMPORTANT: nothing is saved to the server as items are dragged. Every
+    // move is only recorded in the `pendingChanges` map below; the actual
+    // POST only happens once, when "Save changes" is clicked - this lets an
+    // admin re-arrange several destinations before committing anything.
+    // ------------------------------------------------------------------- //
+    var board = document.getElementById("bucket-board");
+    var statusEl = document.getElementById("routes-status");
+    var pendingChanges = {}; // destinationId (string) -> new direction bucket
+    var draggedItem = null;
+
+    function wireItem(item) {
+      item.addEventListener("dragstart", function (evt) {
+        draggedItem = item;
+        evt.dataTransfer.effectAllowed = "move";
+        // Firefox requires data to be set on the drag event for the drag to
+        // start at all - the value itself isn't used, we read draggedItem.
+        evt.dataTransfer.setData("text/plain", item.dataset.destinationId);
+      });
+    }
+
+    function wireList(list) {
+      list.addEventListener("dragover", function (evt) {
+        evt.preventDefault(); // a drop is only allowed if dragover calls this
+        evt.dataTransfer.dropEffect = "move";
+      });
+      list.addEventListener("drop", function (evt) {
+        evt.preventDefault();
+        if (!draggedItem) return;
+        var emptyPlaceholder = list.querySelector(".bucket-empty");
+        if (emptyPlaceholder) emptyPlaceholder.remove();
+        list.appendChild(draggedItem);
+        pendingChanges[draggedItem.dataset.destinationId] = list.dataset.direction;
+        refreshBucketCounts();
+        draggedItem = null;
+      });
+    }
+
+    function refreshBucketCounts() {
+      board.querySelectorAll(".bucket-column").forEach(function (column) {
+        var countEl = column.querySelector(".bucket-count");
+        var list = column.querySelector(".bucket-list");
+        if (countEl && list) {
+          countEl.textContent = "(" + list.querySelectorAll(".bucket-item").length + ")";
+        }
+      });
+    }
+
+    board.querySelectorAll(".bucket-item").forEach(wireItem);
+    board.querySelectorAll(".bucket-list").forEach(wireList);
+
+    document.getElementById("routes-save").addEventListener("click", function () {
+      var destinationIds = Object.keys(pendingChanges);
+      if (destinationIds.length === 0) {
+        statusEl.textContent = "No changes to save.";
+        return;
+      }
+      fetch("/signages/{{ signage.id }}/routes/bulk-update", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(pendingChanges)
+      })
+        .then(function (resp) {
+          if (!resp.ok) throw new Error("Server rejected the changes.");
+          return resp.json();
+        })
+        .then(function () {
+          window.location.reload();
+        })
+        .catch(function (err) {
+          statusEl.textContent = "Error saving changes: " + err.message;
+        });
+    });
+
+    // "Discard changes": since dragging never touches the server, simply
+    // reloading the page from the database is enough to undo every move.
+    document.getElementById("routes-discard").addEventListener("click", function () {
+      window.location.reload();
+    });
+
+    // ------------------------------------------------------------------- //
+    // "Edit label" inline panel - independent of the drag-and-drop above.
+    // ------------------------------------------------------------------- //
+    var labelModal = document.getElementById("label-modal");
+    document.getElementById("label-modal-close").addEventListener("click", function () {
+      labelModal.hidden = true;
+    });
+    board.addEventListener("click", function (evt) {
+      var button = evt.target.closest(".edit-label-btn");
+      if (!button) return;
+      var item = button.closest(".bucket-item");
+      var list = item.closest(".bucket-list");
+      document.getElementById("label-modal-destination-id").value = item.dataset.destinationId;
+      // Use the item's CURRENT bucket (which may already be a pending, not
+      // yet saved, move) so saving the label doesn't silently undo a drag.
+      document.getElementById("label-modal-direction").value = list.dataset.direction;
+      document.getElementById("label-modal-input").value = item.dataset.displayLabel || "";
+      document.getElementById("label-modal-title").textContent =
+        "Custom message for " + item.querySelector(".bucket-item-name").textContent;
+      labelModal.hidden = false;
+    });
+  })();
+</script>
 {% endblock %}

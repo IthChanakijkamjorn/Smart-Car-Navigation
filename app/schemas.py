@@ -7,7 +7,7 @@ dashboard uses plain HTML forms.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -77,3 +77,17 @@ class SeedResult(BaseModel):
 
     created: dict[str, Any]
     message: str
+
+
+class MapPositionUpdate(BaseModel):
+    """One marker's new position, as dragged on the Map View (Improvement 1).
+
+    Sent as a JSON array of these to ``POST /map/positions`` - one batch
+    request covers every marker the admin moved before clicking "Save
+    positions", instead of saving on every single drag.
+    """
+
+    type: Literal["signage", "destination"]
+    id: int
+    x: float = Field(ge=0, le=100, description="Percentage of the map image's width.")
+    y: float = Field(ge=0, le=100, description="Percentage of the map image's height.")

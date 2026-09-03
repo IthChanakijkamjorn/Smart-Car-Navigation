@@ -42,8 +42,8 @@ One backend application exposes three interfaces:
 | --- | --- | --- |
 | Detection webhook | `POST /api/detections` | Dahua cameras (machine to machine) |
 | Admin / guard dashboard | `/` (Map View), `/vehicles`, `/csv-import`, `/logs`, `/signages` | security guard / admin, in a browser |
-| Signage routing table | `/signages/{id}/routes` | admin, configures per-signage direction |
-| Map View upload/position | `/map/upload`, `/signages/{id}/position`, `/destinations/{id}/position` | admin, configures the Map View |
+| Signage routing table | `/signages/{id}/routes` | admin, drags destinations between direction buckets |
+| Map View upload/position | `/map/upload`, `/map/positions` (batch drag save), `/signages/{id}/position`, `/destinations/{id}/position` (manual fallback) | admin, configures the Map View |
 | Signage display | `/signage/{signage_code}` | the screen itself, no human interaction |
 | Interactive API docs | `/docs` | you, while developing |
 
@@ -200,22 +200,41 @@ showing it — a destination might be "turn right" from the signage at the
 entrance and "go straight" from a second signage further down the road, even
 though it's the exact same destination. This is modelled with a
 `signage_routes` table: one row per `(signage, destination)` pair, holding
-the `direction` (left/right/straight/u_turn, or any custom word) and an
-optional custom `display_label` message.
+the `direction` (`unset`/`left`/`right`/`straight`/`u_turn`, or any custom
+word) and an optional custom `display_label` message.
 
-To configure it:
+**Every signage always has a route row for every destination.** You never
+manually add or remove a `(signage, destination)` pairing — it is created
+automatically, defaulting to the direction `"unset"`, the moment a new
+signage OR a new destination is added (see `services.ensure_signage_routes` /
+`ensure_destination_routes`). Any pairs from before this existed are filled
+in the same way at startup (`services.backfill_all_signage_routes`, called
+once when the app boots — see `app/main.py`). This means the routing page is
+always "complete": you only ever *adjust* a direction, and `"unset"` is a
+deliberately loud default so it's obvious at a glance which destinations
+still need configuring for a given signage.
+
+The `/signages/{id}/routes` page groups destinations into **direction
+buckets** — one column per direction, "Unset / Not configured" highlighted in
+orange so it stands out:
 
 1. Go to `/signages` and click **"Routing table"** next to a signage.
-2. For each destination, pick a direction (and, optionally, type a custom
-   message instead of the default "`<destination>` - `<direction>`" text).
-3. Repeat for every other signage — the same destination can have a totally
-   different direction configured there.
+2. **Drag** a destination card from one bucket into the correct direction
+   bucket. Nothing is saved to the server as you drag — move as many
+   destinations as you like, then click **"Save changes"** to persist them
+   all in one request (or **"Discard changes"** to reload and undo).
+3. To set a custom message for one destination instead of the default
+   "`<destination>` - `<direction>`" text, click its small **"Edit label"**
+   button — a tiny inline form to type the message, independent of the
+   drag-and-drop.
+4. Repeat for every other signage — the same destination can (and often
+   should) sit in a different bucket there.
 
-**What happens if a signage was never configured for a destination?** The
-screen falls back to a safe message (`See attendant` by default, configurable
-via `UNROUTED_MESSAGE`) instead of guessing a direction, and a warning is
-logged server-side so you notice the gap. This shows up as `"state": "unrouted"`
-on the polling API.
+**What happens while a destination is still "unset" (or, for older data, has
+no route row at all)?** The screen falls back to a safe message
+(`See attendant` by default, configurable via `UNROUTED_MESSAGE`) instead of
+guessing a direction, and a warning is logged server-side so you notice the
+gap. This shows up as `"state": "unrouted"` on the polling API.
 
 ---
 
@@ -229,20 +248,25 @@ position set.
   (max 8 MB) — a photo, floor plan or scanned drawing of the site. It is
   stored under `app/static/uploads/` and remembered in the single-row
   `map_settings` table.
-* **Set a marker's position:** on `/signages`, each signage/destination has a
-  **"Map position"** link — a simple form where you type X/Y as percentages
-  (0-100) of the image's width/height (e.g. "50, 50" is the dead centre).
-  Leave both blank to remove the marker.
-* **Using the map:** click 🖥️ (signage) or 📍 (destination) markers to open a
-  details panel — for a signage this shows its location, what it is
-  currently displaying (live, from `signage_current_state`), and links to its
-  routing table and its position editor; for a destination it links to its
-  position editor.
-* **Possible future enhancement:** this iteration deliberately uses simple
-  numeric inputs rather than drag-and-drop marker placement, to keep the
-  implementation small. Drag-and-drop (dragging the pin directly on the map
-  image and saving the resulting percentage) would be a nice usability
-  upgrade later.
+* **Position markers by drag-and-drop (the normal way now):** on the
+  dashboard, click **"Enable edit mode"**. Every marker becomes draggable —
+  pick one up and drop it wherever it belongs on the map image. As with the
+  routing buckets above, nothing is saved on every drag: move as many
+  markers as you like, then click **"Save positions"** to persist them all
+  in one batch request, or **"Discard changes"** to snap everything back to
+  its last saved spot. Click **"Done editing"** (or just navigate away
+  without saving) to leave edit mode without keeping any unsaved moves.
+* **Manual numeric fallback:** each signage/destination still has a
+  **"Edit position manually"** link (in the marker's info panel, or from
+  `/signages`) — a simple form where you type X/Y as percentages (0-100) of
+  the image's width/height (e.g. "50, 50" is the dead centre). Useful when
+  drag-and-drop isn't precise enough, or the marker isn't visible yet because
+  it has no position at all. Leave both fields blank to remove the marker.
+* **Using the map (outside edit mode):** click 🖥️ (signage) or 📍
+  (destination) markers to open a details panel — for a signage this shows
+  its location, what it is currently displaying (live, from
+  `signage_current_state`), and links to its routing table and its manual
+  position editor; for a destination it links to its manual position editor.
 
 ---
 
@@ -368,9 +392,6 @@ These were intentionally left out of this first scaffold:
   plate → destination. The `destinations` table is deliberately free of
   constraints that would block adding `capacity` / `current_occupancy` columns
   later.
-* **No drag-and-drop marker placement on the Map View.** Positions are set via
-  a simple numeric (percentage) form for now - see section 5b. Drag-and-drop
-  would be a nice future enhancement.
 * **Snapshots are not stored as files.** The base64 image sent by the camera is
   kept inside the raw payload only.
 * **No HTTPS.** Not required on an isolated LAN, but worth adding if the network

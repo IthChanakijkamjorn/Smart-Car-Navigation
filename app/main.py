@@ -21,8 +21,8 @@ from fastapi import Depends, FastAPI
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 
-from app import __version__
-from app.database import get_db, init_db
+from app import __version__, services
+from app.database import SessionLocal, get_db, init_db
 from app.routers import admin, detections, map_admin, signage
 from app.schemas import SeedResult
 from app.seed import seed
@@ -40,6 +40,13 @@ app = FastAPI(
 # Create the SQLite tables on startup. For schema changes over time, switch to
 # Alembic migrations (see README) instead of relying on this call.
 init_db()
+
+# Backfill/migration step (Improvement 2): make sure every (signage,
+# destination) pair already has a signage_routes row (defaulting to "unset")
+# before the app starts serving requests, so admins never have to run a
+# manual migration - see services.backfill_all_signage_routes.
+with SessionLocal() as _startup_db:
+    services.backfill_all_signage_routes(_startup_db)
 
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 

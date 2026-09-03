@@ -107,3 +107,47 @@ def test_dashboard_home_lists_placed_markers(client, db_session: Session) -> Non
     assert response.status_code == 200
     assert "SIGN-MAP" in response.text
     assert "Lot Z" in response.text
+
+
+def test_batch_update_map_positions(client, db_session: Session, sample_setup: dict) -> None:
+    """Improvement 1: the batch endpoint used by the drag-and-drop marker UI."""
+    signage = sample_setup["signage"]
+    destination = sample_setup["destination"]
+
+    response = client.post(
+        "/map/positions",
+        json=[
+            {"type": "signage", "id": signage.id, "x": 12.5, "y": 87.25},
+            {"type": "destination", "id": destination.id, "x": 40, "y": 60},
+        ],
+    )
+    assert response.status_code == 200
+    assert response.json()["updated"] == 2
+
+    db_session.refresh(signage)
+    db_session.refresh(destination)
+    assert signage.map_x == 12.5
+    assert signage.map_y == 87.25
+    assert destination.map_x == 40.0
+    assert destination.map_y == 60.0
+
+
+def test_batch_update_map_positions_ignores_unknown_id(
+    client, db_session: Session, sample_setup: dict
+) -> None:
+    response = client.post(
+        "/map/positions",
+        json=[{"type": "signage", "id": 999999, "x": 10, "y": 10}],
+    )
+    assert response.status_code == 200
+    assert response.json()["updated"] == 0
+
+
+def test_batch_update_map_positions_rejects_out_of_range_coordinates(
+    client, db_session: Session, sample_setup: dict
+) -> None:
+    response = client.post(
+        "/map/positions",
+        json=[{"type": "signage", "id": sample_setup["signage"].id, "x": 150, "y": 10}],
+    )
+    assert response.status_code == 422

@@ -284,12 +284,18 @@ def create_or_update_signage(
         return _redirect("/signages", "Signage code is required")
 
     signage = db.scalar(select(Signage).where(Signage.code == code))
+    is_new = signage is None
     if signage is None:
         signage = Signage(code=code)
         db.add(signage)
     signage.name = name.strip() or code
     signage.location = location.strip() or None
     signage.supported_directions = supported_directions.strip() or None
+    if is_new:
+        db.flush()  # need signage.id before creating its default routes below
+        # New signage: auto-create an "unset" route for every existing
+        # destination (Improvement 2) - see services.ensure_signage_routes.
+        services.ensure_signage_routes(db, signage)
     db.commit()
     return _redirect("/signages", f"Saved signage {code}")
 
@@ -354,6 +360,10 @@ def create_or_update_destination(
     if destination is None:
         destination = Destination(name=name)
         db.add(destination)
+        db.flush()  # need destination.id before creating its default routes
+        # New destination: auto-create an "unset" route on every existing
+        # signage (Improvement 2) - see services.ensure_destination_routes.
+        services.ensure_destination_routes(db, destination)
     db.commit()
     return _redirect("/signages", f"Saved destination {name}")
 
