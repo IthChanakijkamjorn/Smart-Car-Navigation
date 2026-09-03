@@ -1,0 +1,61 @@
+/* Signage display styling: huge, high contrast, readable from a distance. */
+
+* { box-sizing: border-box; }
+
+html, body {
+  height: 100%;
+  margin: 0;
+  background: #000;
+  color: #fff;
+  font-family: "Segoe UI", Arial, Helvetica, sans-serif;
+  overflow: hidden;
+}
+
+.screen {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 2vh 2vw;
+}
+
+.arrow {
+  font-size: 30vh;
+  line-height: 1;
+  font-weight: 700;
+}
+
+.destination {
+  font-size: 12vh;
+  line-height: 1.1;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.plate {
+  margin-top: 2vh;
+  font-size: 5vh;
+  font-family: "Courier New", monospace;
+  opacity: 0.75;
+}
+
+/* Colour per state so a driver can read the screen at a glance. */
+body.state-idle { background: #0b1a2b; color: #cfe3ff; }
+body.state-idle .destination { font-size: 8vh; font-weight: 600; text-transform: none; }
+body.state-guiding { background: #073b16; color: #eaffef; }
+body.state-unregistered { background: #4a2f00; color: #fff3cd; }
+body.state-unregistered .destination { font-size: 8vh; }
+
+.corner {
+  position: fixed;
+  bottom: 1vh;
+  right: 1.5vw;
+  font-size: 1.8vh;
+  opacity: 0.5;
+}
+
+.corner .ok { color: #7CFC9B; }
+.corner .error { color: #ff9f9f; }

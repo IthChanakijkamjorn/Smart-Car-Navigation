@@ -1,0 +1,27 @@
+# One command to run the whole on-premise appliance:  docker compose up --build
+services:
+  app:
+    build: .
+    container_name: smart-car-navigation
+    # Always come back up after a power cut on the mini PC.
+    restart: unless-stopped
+    ports:
+      # Cameras, the guard's browser and the signages all reach the server here.
+      - "8000:8000"
+    environment:
+      DATABASE_URL: sqlite:////app/data/smart_car_navigation.db
+      # How long a message stays on a screen before it goes back to idle.
+      DISPLAY_TTL_SECONDS: "15"
+      # What a screen shows when the plate is not registered.
+      UNREGISTERED_MESSAGE: "Please proceed to the guard booth"
+    volumes:
+      # Named volume so the database survives container restarts/upgrades.
+      - db_data:/app/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  db_data:

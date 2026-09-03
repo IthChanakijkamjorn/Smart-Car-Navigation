@@ -1,0 +1,46 @@
+{% extends "dashboard/base.html" %}
+{% block title %}Detection Logs - Smart Car Navigation{% endblock %}
+
+{% block content %}
+<h1>Detection logs</h1>
+<p>Raw events received from the cameras and the direction that was shown.</p>
+
+<form method="get" action="/logs" class="inline-form">
+  <label>Plate contains
+    <input type="text" name="q" value="{{ q }}" placeholder="AB1234">
+  </label>
+  <label>Max rows
+    <input type="number" name="limit" value="{{ limit }}" min="1" max="1000">
+  </label>
+  <button type="submit">Filter</button>
+  <a class="button-link" href="/logs">Clear</a>
+</form>
+
+<table>
+  <thead>
+    <tr>
+      <th>Time (UTC)</th><th>Camera</th><th>Plate (raw)</th>
+      <th>Matched vehicle</th><th>Shown destination</th><th>Confidence</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for event in events %}
+      <tr>
+        <td>{{ event.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+        <td>{{ event.camera.code if event.camera else 'unknown' }}</td>
+        <td class="mono">{{ event.plate_number }}</td>
+        <td class="mono">
+          {{ event.matched_vehicle.plate_number if event.matched_vehicle else '-' }}
+        </td>
+        <td>
+          {% if event.matched_destination %}{{ event.matched_destination.name }}
+          {% else %}<span class="warn">unregistered</span>{% endif %}
+        </td>
+        <td>{{ '%.2f'|format(event.confidence) if event.confidence is not none else '-' }}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="6" class="empty">No detection events yet.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

@@ -1,0 +1,11 @@
+# Runtime dependencies for the Smart Car Navigation on-premise server.
+# Keep this list small: the whole app is meant to run on a small mini PC on site.
+fastapi>=0.115.6
+uvicorn[standard]>=0.34.0
+SQLAlchemy>=2.0.36
+Jinja2>=3.1.6
+python-multipart>=0.0.20   # required by FastAPI to parse HTML form / file uploads
+
+# Development / test only (safe to install on the server too, they are tiny)
+pytest>=8.3.4
+httpx>=0.28.1              # used by fastapi.testclient

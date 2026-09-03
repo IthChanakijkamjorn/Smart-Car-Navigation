@@ -1,0 +1,126 @@
+{% extends "dashboard/base.html" %}
+{% block title %}Signages &amp; Cameras - Smart Car Navigation{% endblock %}
+
+{% block content %}
+<h1>Signages, cameras &amp; destinations</h1>
+
+<section class="panel">
+  <h2>Destinations</h2>
+  <p>Where cars can be sent. The direction hint picks the arrow shown on screen.</p>
+  <form method="post" action="/destinations" class="inline-form">
+    <label>Name <input type="text" name="name" placeholder="Lot A" required></label>
+    <label>Direction hint
+      <select name="direction_hint">
+        <option value="left">left</option>
+        <option value="right">right</option>
+        <option value="straight" selected>straight</option>
+      </select>
+    </label>
+    <button type="submit">Save destination</button>
+  </form>
+  <table>
+    <thead><tr><th>Name</th><th>Direction hint</th><th></th></tr></thead>
+    <tbody>
+      {% for destination in destinations %}
+        <tr>
+          <td>{{ destination.name }}</td>
+          <td>{{ destination.direction_hint }}</td>
+          <td>
+            <form method="post" action="/destinations/{{ destination.id }}/delete"
+                  onsubmit="return confirm('Delete {{ destination.name }}?');">
+              <button type="submit" class="danger">Delete</button>
+            </form>
+          </td>
+        </tr>
+      {% else %}
+        <tr><td colspan="3" class="empty">No destinations yet.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section class="panel">
+  <h2>Signages (screens)</h2>
+  <p>Submitting an existing code updates that signage.</p>
+  <form method="post" action="/signages" class="inline-form">
+    <label>Code <input type="text" name="code" placeholder="SIGN-01" required></label>
+    <label>Name <input type="text" name="name" placeholder="Entrance signage" required></label>
+    <label>Location <input type="text" name="location" placeholder="Main gate"></label>
+    <label>Supported directions
+      <input type="text" name="supported_directions" placeholder="Lot A, Lot B, Lot C">
+    </label>
+    <button type="submit">Save signage</button>
+  </form>
+  <table>
+    <thead>
+      <tr><th>Code</th><th>Name</th><th>Location</th><th>Supports</th><th>Display URL</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for signage in signages %}
+        <tr>
+          <td class="mono">{{ signage.code }}</td>
+          <td>{{ signage.name }}</td>
+          <td>{{ signage.location or '' }}</td>
+          <td>{{ signage.supported_directions or '' }}</td>
+          <td>
+            <a href="/signage/{{ signage.code }}" target="_blank" rel="noopener">
+              /signage/{{ signage.code }}
+            </a>
+          </td>
+          <td>
+            <form method="post" action="/signages/{{ signage.id }}/delete"
+                  onsubmit="return confirm('Delete {{ signage.code }}?');">
+              <button type="submit" class="danger">Delete</button>
+            </form>
+          </td>
+        </tr>
+      {% else %}
+        <tr><td colspan="6" class="empty">No signage yet.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section class="panel">
+  <h2>Cameras</h2>
+  <p>
+    The code must match the camera ID the Dahua device sends in its event payload
+    (<code>cameraID</code>). Detections update the linked signage.
+  </p>
+  <form method="post" action="/cameras" class="inline-form">
+    <label>Code <input type="text" name="code" placeholder="CAM-ENTRANCE-01" required></label>
+    <label>Name <input type="text" name="name" placeholder="Entrance LPR camera" required></label>
+    <label>Location <input type="text" name="location" placeholder="Main gate"></label>
+    <label>Linked signage
+      <select name="linked_signage_id">
+        <option value="">(none)</option>
+        {% for signage in signages %}
+          <option value="{{ signage.id }}">{{ signage.code }} - {{ signage.name }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <button type="submit">Save camera</button>
+  </form>
+  <table>
+    <thead><tr><th>Code</th><th>Name</th><th>Location</th><th>Linked signage</th><th></th></tr></thead>
+    <tbody>
+      {% for camera in cameras %}
+        <tr>
+          <td class="mono">{{ camera.code }}</td>
+          <td>{{ camera.name }}</td>
+          <td>{{ camera.location or '' }}</td>
+          <td>{{ camera.signage.code if camera.signage else '(none)' }}</td>
+          <td>
+            <form method="post" action="/cameras/{{ camera.id }}/delete"
+                  onsubmit="return confirm('Delete {{ camera.code }}?');">
+              <button type="submit" class="danger">Delete</button>
+            </form>
+          </td>
+        </tr>
+      {% else %}
+        <tr><td colspan="5" class="empty">No cameras yet.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}
